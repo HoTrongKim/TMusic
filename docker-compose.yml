@@ -1,0 +1,19 @@
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: ${ACCEPT_EULA:-Y}
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set a strong local SQL password in .env}
+    ports:
+      - "127.0.0.1:1433:1433"
+    volumes:
+      - tmusic_v2_sql:/var/opt/mssql
+    restart: unless-stopped
+  mail:
+    image: axllent/mailpit:v1.27.8
+    profiles: [dev-mail]
+    ports:
+      - "127.0.0.1:11025:1025"
+      - "127.0.0.1:18025:8025"
+volumes:
+  tmusic_v2_sql:

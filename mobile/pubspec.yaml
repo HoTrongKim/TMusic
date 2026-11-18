@@ -1,0 +1,32 @@
+name: tmusic
+description: Thư viện liên kết âm nhạc cá nhân TMusic.
+publish_to: none
+version: 2.0.0+1
+environment:
+  sdk: '>=3.13.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  flutter_riverpod: ^3.5.0
+  dio: ^5.11.1
+  flutter_secure_storage: ^11.2.0
+  go_router: ^18.1.4
+  google_sign_in: ^7.2.0
+  sign_in_with_apple: ^8.2.0
+  url_launcher: ^6.3.3
+  file_selector: ^1.1.0
+  path_provider: ^2.1.6
+  sqflite: ^2.4.6
+  just_audio: ^0.10.6
+  audio_service: ^0.18.19
+  audio_session: ^0.2.4
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true

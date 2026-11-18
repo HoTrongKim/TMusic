@@ -1,0 +1,2 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker"><PropertyGroup><OutputType>Exe</OutputType></PropertyGroup><ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><ProjectReference Include="../TMusic.Infrastructure/TMusic.Infrastructure.csproj" /></ItemGroup></Project>
+

@@ -1,0 +1,11 @@
+**/bin
+**/obj
+**/build
+**/.dart_tool
+**/.env
+**/.env.*
+.git
+.local
+.test-artifacts
+mobile
+docs
