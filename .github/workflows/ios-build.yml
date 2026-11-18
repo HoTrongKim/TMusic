@@ -2,6 +2,11 @@ name: Build iOS IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'Địa chỉ HTTPS của API TMusic'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -36,7 +41,11 @@ jobs:
         run: flutter test --no-pub
 
       - name: Build iOS
-        run: flutter build ios --release --no-codesign --no-pub
+        env:
+          TMUSIC_BUILD_API_URL: ${{ inputs.api_url }}
+        run: |
+          python3 -c 'import os, sys, urllib.parse; u = urllib.parse.urlsplit(os.environ["TMUSIC_BUILD_API_URL"]); sys.exit(0 if u.scheme == "https" and u.hostname and not (u.username or u.password or u.path not in ("", "/") or u.query or u.fragment) else 1)'
+          flutter build ios --release --no-codesign --no-pub --dart-define="TMUSIC_API_URL=$TMUSIC_BUILD_API_URL"
 
       - name: Đóng gói IPA
         run: |

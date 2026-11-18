@@ -53,6 +53,21 @@ Kiểm tra sức khỏe dịch vụ:
 
 ## 3. Triển Khai Container / Production (`Docker`)
 
+### Chạy SQL Server cục bộ bằng Docker Desktop
+
+File `docker-compose.yml` đã có service `db` cho SQL Server 2022, chỉ lắng nghe tại `127.0.0.1:1433` và lưu dữ liệu trong Docker volume riêng `tmusic_v2_sql`. Khởi động Docker Desktop với Linux containers, sau đó mở PowerShell ở thư mục gốc dự án:
+
+```powershell
+$securePassword = Read-Host 'Nhập mật khẩu SQL Server sa' -AsSecureString
+$env:MSSQL_SA_PASSWORD = (New-Object System.Net.NetworkCredential('', $securePassword)).Password
+docker compose up -d db
+Remove-Item Env:MSSQL_SA_PASSWORD
+```
+
+Chọn mật khẩu mạnh theo yêu cầu của SQL Server và lưu tại nơi an toàn. Không đưa mật khẩu vào mã nguồn hoặc gửi qua chat. Docker Compose dùng mật khẩu để khởi tạo instance mới; nếu volume đã có dữ liệu, thay đổi biến môi trường không thay đổi mật khẩu `sa` đã thiết lập. Để chạy lại lệnh Compose khi biến chưa được cấu hình, nhập lại mật khẩu đã dùng. Không dùng `docker compose down -v` nếu cần giữ dữ liệu.
+
+Lệnh này chỉ khởi động SQL Server: nó không tạo database `TMusicV2Dev`, không chuyển dữ liệu và không tự đổi cấu hình kết nối của API. Database V2 và cấu hình API phải được thiết lập riêng trước khi sử dụng; không chạy migration lên `TMusicDev` cũ. Nếu cổng 1433 đã được dịch vụ khác sử dụng, cần chọn một cổng máy chủ còn trống và cập nhật kết nối API tương ứng.
+
 ```powershell
 # Khởi chạy SQL Server 2022 cục bộ và Mailpit (chỉ dành cho dev)
 docker compose --profile dev-mail up -d

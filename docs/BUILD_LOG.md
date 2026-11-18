@@ -148,3 +148,23 @@ Hoàn thành theo bốn yêu cầu giao diện/lỗi đăng nhập của ngườ
 | `Get-FileHash .env -Algorithm SHA256` trước/sau | Khớp bản gốc **5EFA5C78DEEDF3910259D261FC039AFAAF72F86EA259D210C56BA015C7A420F7**. Không in/đổi/bundle secrets. |
 
 **Giới hạn xác minh:** Thiết bị đang có phiên Google thật nên giữ phiên, không đăng xuất/đăng nhập mới hoặc chọn tài khoản Google thay người dùng. Chưa xác minh mới toàn bộ Google SDK → token → API bằng thông tin đăng nhập thật; lỗi điều hướng được tái hiện/sửa bằng regression tests dùng router và session thật. Layout Login được kiểm tra widget với cả theme/bàn phím/chữ lớn, chưa mở Login trên điện thoại đang đăng nhập. Không nhấn Thêm để thay album đang dùng; ghi album/partial retry được xác minh bằng tests. Không build iOS trên Windows. Backend không đổi, không chạy lại backend tests hoặc khởi động lại API/Worker. Không chạy lệnh SQL/migration/reset trên bất kỳ database nào; chỉ đổi theme qua app rồi trả về tối. Không tạo nội dung mẫu trên thiết bị.
+# 2026-11-19 — Kiểm tra cấu hình Docker SQL cục bộ
+
+- `docker compose config --quiet` với mật khẩu tạm chỉ trong biến môi trường: thành công; không thay đổi `.env`.
+- Chưa chạy container hoặc kiểm tra kết nối database: Docker Desktop/Linux engine chưa được xác nhận sẵn sàng trong phiên này. File `.env` hiện không cung cấp giá trị `MSSQL_SA_PASSWORD` cho Compose.
+
+## 2026-11-19 — Khởi động SQL Server Docker
+
+- Docker Engine Linux 29.1.3 đã sẵn sàng; `docker compose up -d --quiet-pull db` tạo container SQL Server và volume riêng.
+- Kết nối `sqlcmd` trong container thành công; migration vào database mới `TMusicV2Dev` trong container hoàn tất, kiểm tra thấy 4 migrations và 22 bảng người dùng.
+- Mật khẩu ngẫu nhiên lưu bằng SecureString của Windows dưới `.local/`, không ghi vào `.env`. API hiện tại chưa được chuyển sang instance Docker; chưa kiểm tra luồng ứng dụng qua instance này.
+
+## 2026-11-19 — Kiểm tra API với SQL Server Docker
+
+- Khởi động một API thử nghiệm ở `127.0.0.1:5079` với kết nối tới `TMusicV2Dev` trong container; cấu hình chỉ trong tiến trình, không sửa `.env`.
+- `GET http://127.0.0.1:5079/health/ready`: HTTP 200. Chưa kiểm tra đăng nhập, tải nhạc hoặc truy cập qua Internet; cấu hình này chỉ dành cho phát triển cục bộ.
+
+## 2026-11-19 — Kiểm tra tunnel và cấu hình build iOS
+
+- Tạo Cloudflare Quick Tunnel tạm tới API cục bộ, đặt origin Host là `localhost:5079`; kiểm tra HTTPS `/health/ready` bằng DNS-over-HTTPS và `curl --resolve`: HTTP 200.
+- Kiểm tra cấu trúc workflow iOS bằng PyYAML: input `api_url` bắt buộc và được truyền làm `TMUSIC_API_URL`. Chưa kiểm tra cài đặt hoặc các chức năng trên iPhone; tunnel thử nghiệm không có địa chỉ ổn định.
