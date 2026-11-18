@@ -7,7 +7,7 @@ public sealed record SourceUrl(string Provider, string Id, string CanonicalUrl)
 {
     private static readonly Regex VideoPattern = new(@"\A[A-Za-z0-9_-]{11}\z", RegexOptions.NonBacktracking);
     private static readonly Regex PlaylistPattern = new(@"\A[A-Za-z0-9_-]{10,128}\z", RegexOptions.NonBacktracking);
-    private static readonly Regex TikTokPattern = new(@"\A/@([A-Za-z0-9_.]{1,32})/video/([0-9]{1,24})/?\z", RegexOptions.NonBacktracking);
+    private static readonly Regex TikTokPattern = new(@"\A/@(?<creator>[A-Za-z0-9_.]{1,32})/(?<kind>video|photo)/(?<id>[0-9]{1,24})/?\z", RegexOptions.NonBacktracking);
     private static readonly Regex SoundCloudTrackPattern = new(@"\A/([A-Za-z0-9_-]{1,48})/([A-Za-z0-9_-]{1,78})/?\z", RegexOptions.NonBacktracking);
     private static readonly Regex ShortPattern = new(@"\A/[A-Za-z0-9_-]{3,64}/?\z", RegexOptions.NonBacktracking);
 
@@ -58,8 +58,8 @@ public sealed record SourceUrl(string Provider, string Id, string CanonicalUrl)
         if (uri.Host is "www.tiktok.com" or "tiktok.com" or "m.tiktok.com")
         {
             var match = TikTokPattern.Match(uri.AbsolutePath);
-            return match.Success ? new("tiktok", match.Groups[2].Value,
-                $"https://www.tiktok.com/@{match.Groups[1].Value}/video/{match.Groups[2].Value}") : null;
+            return match.Success ? new("tiktok", match.Groups["id"].Value,
+                $"https://www.tiktok.com/@{match.Groups["creator"].Value}/{match.Groups["kind"].Value}/{match.Groups["id"].Value}") : null;
         }
         if (uri.Host is "soundcloud.com" or "www.soundcloud.com" or "m.soundcloud.com")
         {

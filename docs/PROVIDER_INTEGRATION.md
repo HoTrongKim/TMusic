@@ -17,7 +17,7 @@ Phạm vi hiện hành ngày 18/11/2026 theo `AGENTS.md`: TMusic lưu liên kế
 1. **Nhận & Kiểm tra sơ bộ (`SourceUrl.TryHttps`):** Cắt khoảng trắng, giới hạn tối đa 2.048 ký tự, bắt buộc giao thức `https://`, cổng mặc định `443`, không chứa thông tin đăng nhập (`UserInfo`), không chứa ký tự điều khiển hoặc punycode bất thường.
 2. **Nhận diện nguồn & Chuẩn hóa (`SourceUrl.ParseVideo`):**
    - **YouTube:** Hỗ trợ `youtube.com/watch?v=`, `m.youtube.com`, `music.youtube.com`, `youtu.be/<id>`, `youtube.com/shorts/<id>`, `youtube.com/live/<id>`. Kiểm tra video ID khớp chính xác biểu thức `^[A-Za-z0-9_-]{11}$` (không backtracking) và chuẩn hóa về `https://www.youtube.com/watch?v=<id>` (loại bỏ các tham số tracking như `si=`).
-   - **TikTok:** Hỗ trợ `tiktok.com/@<user>/video/<id>`, `www.tiktok.com`, `m.tiktok.com` và các link rút gọn hợp lệ `vt.tiktok.com/<code/>`, `vm.tiktok.com/<code/>`, `tiktok.com/t/<code/>`.
+   - **TikTok:** Hỗ trợ bài video `tiktok.com/@<user>/video/<id>` và bài ảnh có nhạc `tiktok.com/@<user>/photo/<id>`, trên các host `www.tiktok.com`, `tiktok.com`, `m.tiktok.com` cùng các link rút gọn hợp lệ `vt.tiktok.com/<code/>`, `vm.tiktok.com/<code/>`, `tiktok.com/t/<code/>`. Giữ nguyên loại `/video/` hoặc `/photo/` trong canonical URL và attribution.
    - **SoundCloud:** Hỗ trợ `soundcloud.com`, `www.soundcloud.com`, `m.soundcloud.com` với `/artist/track`, loại các trang/chuyên mục dành riêng; `on.soundcloud.com` qua resolver. ID track được chuẩn hóa chữ thường.
 3. **Giải mã Redirect an toàn cho TikTok Shortlink (`TikTokRedirectResolver`):**
    - Tối đa 5 bước chuyển hướng (`301/302/303/307/308`), phát hiện vòng lặp ngay lập tức.

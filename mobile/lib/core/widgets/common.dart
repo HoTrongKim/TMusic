@@ -11,15 +11,33 @@ import '../localization/app_copy.dart';
 
 String errorText(BuildContext context, Object error) {
   if (error is ApiFailure) {
-    final authCopy = switch (error.code.toUpperCase()) {
+    if (error.status == 429) return context.tr('tooManyRequests');
+    final failureCopy = switch (error.code.toUpperCase()) {
       'ACCOUNT_LINK_PROOF_REQUIRED' => 'externalAccountProof',
       'INVALID_EXTERNAL_TOKEN' => 'externalTokenInvalid',
       'PROVIDER_EMAIL_REQUIRED' => 'providerEmailRequired',
       'SOCIAL_AUTH_UNAVAILABLE' ||
       'PROVIDER_NOT_CONFIGURED' => 'socialAuthUnavailable',
+      'INVALID_SOURCE_URL' ||
+      'INVALID_TIKTOK_URL' ||
+      'INVALID_SOUNDCLOUD_URL' ||
+      'UNSUPPORTED_SOURCE_URL' => 'sourceUrlInvalid',
+      'UNSAFE_SOURCE_REDIRECT' => 'sourceRedirectUnsupported',
+      'TIKTOK_SHORT_UNRESOLVED' ||
+      'SOUNDCLOUD_SHORT_UNRESOLVED' ||
+      'TOO_MANY_SOURCE_REDIRECTS' => 'sourceShortLinkUnresolved',
+      'SOURCE_UNAVAILABLE' => 'sourceContentUnavailable',
+      'TIKTOK_IMPORT_DISABLED' => 'tiktokImportDisabled',
+      'SOUNDCLOUD_IMPORT_DISABLED' => 'soundcloudImportDisabled',
+      'SOURCE_ACCESS_CHECK_REQUIRED' => 'sourceAccessCheckRequired',
+      'SOURCE_RESPONSE_UNSUPPORTED' => 'sourceResponseUnsupported',
+      'SOURCE_AUDIO_UNAVAILABLE' => 'sourceAudioUnavailable',
+      'PROVIDER_TEMPORARILY_UNAVAILABLE' => 'sourceTemporarilyUnavailable',
+      'RATE_LIMITED' => 'tooManyRequests',
+      'NETWORK_ERROR' => 'connection',
       _ => null,
     };
-    if (authCopy != null) return context.tr(authCopy);
+    if (failureCopy != null) return context.tr(failureCopy);
     if (error.code == 'google_auth_interrupted') {
       return context.tr('googleInterrupted');
     }

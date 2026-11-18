@@ -20,6 +20,28 @@ class AppCopy {
         'Chứng thực đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
     'providerEmailRequired': 'Nhà cung cấp chưa cung cấp email cần thiết. Hãy chọn tài khoản khác hoặc đăng nhập bằng email.',
     'socialAuthUnavailable': 'Đăng nhập qua nhà cung cấp này chưa sẵn sàng. Vui lòng thử lại sau hoặc đăng nhập bằng email.',
+    'sourceUrlInvalid':
+        'Liên kết không hợp lệ hoặc chưa được hỗ trợ. Hãy dùng liên kết HTTPS từ YouTube, TikTok hoặc SoundCloud.',
+    'sourceRedirectUnsupported':
+        'Liên kết chuyển tới địa chỉ không được hỗ trợ. Hãy mở trong ứng dụng gốc rồi sao chép lại liên kết trực tiếp của bài đăng.',
+    'sourceShortLinkUnresolved':
+        'Chưa xác định được bài đăng từ liên kết rút gọn. Hãy mở trong ứng dụng gốc rồi sao chép liên kết trực tiếp để thử lại.',
+    'sourceContentUnavailable':
+        'Nội dung không khả dụng. Hãy kiểm tra liên kết trong ứng dụng gốc hoặc chọn nội dung khác.',
+    'tiktokImportDisabled':
+        'Nhận diện liên kết TikTok hiện chưa sẵn sàng. Vui lòng thử lại sau.',
+    'soundcloudImportDisabled':
+        'Nhận diện liên kết SoundCloud hiện chưa sẵn sàng. Vui lòng thử lại sau.',
+    'sourceAccessCheckRequired':
+        'Nguồn đang yêu cầu xác minh truy cập. Hãy mở nội dung trong ứng dụng gốc; TMusic chưa thể tải nội dung này.',
+    'sourceResponseUnsupported':
+        'Chưa đọc được phản hồi từ nguồn. Hãy thử lại sau hoặc mở nội dung trong ứng dụng gốc.',
+    'sourceAudioUnavailable':
+        'Bài đăng chưa cung cấp âm thanh công khai có thể tải. Bạn vẫn có thể mở nội dung trong ứng dụng gốc.',
+    'sourceTemporarilyUnavailable':
+        'Nguồn đang tạm thời gián đoạn. Vui lòng thử lại sau.',
+    'tooManyRequests':
+        'Có quá nhiều yêu cầu. Vui lòng chờ một lát rồi thử lại.',
     'albumPickerHint': 'Chọn bài hát để thêm vào album.',
     'albumPickerSelected': 'Đã chọn: {count}',
     'albumPickerAddSelected': 'Thêm {count} bài hát',
@@ -309,6 +331,27 @@ class AppCopy {
         'The sign-in credential is invalid or expired. Please try again.',
     'providerEmailRequired': 'The provider did not supply the required email. Choose another account or sign in with email.',
     'socialAuthUnavailable': 'Sign-in with this provider is not available. Try again later or sign in with email.',
+    'sourceUrlInvalid':
+        'The link is invalid or unsupported. Use an HTTPS link from YouTube, TikTok, or SoundCloud.',
+    'sourceRedirectUnsupported':
+        'The link redirects to an unsupported address. Open it in the original app and copy the direct post link again.',
+    'sourceShortLinkUnresolved':
+        'Could not find the post from this short link. Open it in the original app and copy the direct post link to retry.',
+    'sourceContentUnavailable':
+        'This content is unavailable. Check the link in the original app or choose different content.',
+    'tiktokImportDisabled':
+        'TikTok link recognition is currently unavailable. Please try again later.',
+    'soundcloudImportDisabled':
+        'SoundCloud link recognition is currently unavailable. Please try again later.',
+    'sourceAccessCheckRequired':
+        'The source requires an access check. Open the content in the original app; TMusic cannot download it right now.',
+    'sourceResponseUnsupported':
+        'Could not read the source response. Try again later or open the content in the original app.',
+    'sourceAudioUnavailable':
+        'This post does not provide publicly downloadable audio. You can still open the content in the original app.',
+    'sourceTemporarilyUnavailable':
+        'The source is temporarily unavailable. Please try again later.',
+    'tooManyRequests': 'Too many requests. Please wait a moment and try again.',
     'albumPickerHint': 'Select songs to add to this album.',
     'albumPickerSelected': 'Selected: {count}',
     'albumPickerAddSelected': 'Add {count} songs',

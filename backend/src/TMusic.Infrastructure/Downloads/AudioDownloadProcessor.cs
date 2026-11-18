@@ -113,6 +113,8 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
     {
         if (standardError.Contains("TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED", StringComparison.Ordinal))
             return new ProviderException("SOURCE_ACCESS_CHECK_REQUIRED");
+        if (standardError.Contains("TMUSIC_SOURCE_AUDIO_UNAVAILABLE", StringComparison.Ordinal))
+            return new ProviderException("SOURCE_AUDIO_UNAVAILABLE");
 
         var nonRetryable = standardError.Contains("DRM", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("Private video", StringComparison.OrdinalIgnoreCase) ||

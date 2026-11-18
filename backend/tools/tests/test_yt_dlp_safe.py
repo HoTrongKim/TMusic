@@ -20,6 +20,7 @@ BUNDLE_PATH = Path(os.environ.get(
 sys.path.insert(0, str(BUNDLE_PATH))
 
 from yt_dlp import YoutubeDL
+from yt_dlp.extractor import get_info_extractor
 from yt_dlp.extractor.common import InfoExtractor
 from yt_dlp.extractor.tiktok import TikTokBaseIE, TikTokIE
 from yt_dlp.extractor.youtube import YoutubeIE
@@ -38,6 +39,17 @@ else:
     launcher = None
 
 
+_MISSING = object()
+
+
+def restore_own_attribute(owner, name, value):
+    if value is _MISSING:
+        if name in owner.__dict__:
+            delattr(owner, name)
+    else:
+        setattr(owner, name, value)
+
+
 class TikTokPolicyTests(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(launcher, "The production safety launcher is missing")
@@ -51,6 +63,12 @@ class TikTokPolicyTests(unittest.TestCase):
         ):
             # Restore inherited attributes correctly after each policy installation.
             self.stack.enter_context(mock.patch.object(TikTokBaseIE, name, getattr(TikTokBaseIE, name)))
+        self.selector = get_info_extractor("TikTok")
+        for extractor_class in dict.fromkeys((TikTokIE, self.selector)):
+            for name in ("_VALID_URL", "_VALID_URL_RE"):
+                self.stack.callback(restore_own_attribute, extractor_class, name,
+                    extractor_class.__dict__.get(name, _MISSING))
+        self.stack.enter_context(mock.patch.object(TikTokIE, "_real_extract", TikTokIE._real_extract))
         self.downloader = YoutubeDL({"quiet": True, "no_warnings": True})
         self.addCleanup(self.downloader.close)
         self.extractor = TikTokIE(self.downloader)
@@ -74,6 +92,84 @@ class TikTokPolicyTests(unittest.TestCase):
             self.stack.enter_context(mock.patch.object(
                 self.downloader.cookiejar, name,
                 side_effect=AssertionError("Cookie access is forbidden in this flow")))
+
+    def public_item_page(self, item):
+        data = {"__DEFAULT_SCOPE__": {"webapp.video-detail": {
+            "statusCode": 0, "itemInfo": {"itemStruct": item}}}}
+        return ('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+            + json.dumps(data) + "</script>")
+
+    def test_photo_is_selected_after_both_url_caches_were_populated(self):
+        photo = "https://www.tiktok.com/@creator/photo/123"
+        self.assertFalse(TikTokIE.suitable(photo))
+        self.assertFalse(self.selector.suitable(photo))
+        self.install_policy()
+        self.assertTrue(TikTokIE.suitable(photo))
+        self.assertTrue(self.selector.suitable(photo))
+
+    def test_photo_uses_public_video_route_and_only_its_existing_soundtrack(self):
+        self.install_policy()
+        self.forbid_cookie_operations()
+        item = {
+            "id": "123", "desc": "Photo soundtrack fixture",
+            "author": {"uniqueId": "creator", "id": "456"},
+            "video": {"playAddr": "https://v77.tiktokcdn.com/video/unused.mp4"},
+            "imagePost": {"images": [{"imageURL": {"urlList": [
+                "https://v77.tiktokcdn.com/image/unused.jpg"]}}]},
+            "music": {"playUrl": "https://v77.tiktokcdn.com/audio/track.m4a",
+                "title": "Fixture soundtrack", "authorName": "Fixture artist", "duration": 12},
+        }
+        request = self.respond_with(self.public_item_page(item))
+
+        result = self.extractor._real_extract("https://www.tiktok.com/@creator/photo/123")
+
+        self.assertEqual(result["id"], "123")
+        self.assertEqual(result["track"], "Fixture soundtrack")
+        self.assertEqual(result["uploader"], "creator")
+        self.assertEqual(len(result["formats"]), 1)
+        self.assertEqual(result["formats"][0]["url"], "https://v77.tiktokcdn.com/audio/track.m4a")
+        self.assertEqual(result["formats"][0]["vcodec"], "none")
+        request.assert_called_once()
+        self.assertEqual(request.call_args.args[0].url, "https://www.tiktok.com/@creator/video/123")
+        self.assertNotIn("impersonate", request.call_args.args[0].extensions)
+
+    def test_photo_without_public_soundtrack_rejects_video_fallback(self):
+        self.install_policy()
+        self.forbid_cookie_operations()
+        request = self.respond_with(self.public_item_page({
+            "id": "123", "video": {"playAddr": "https://v77.tiktokcdn.com/video/unused.mp4"},
+            "imagePost": {"images": []},
+        }))
+        with self.assertRaises(ExtractorError) as caught:
+            self.extractor._real_extract("https://www.tiktok.com/@creator/photo/123")
+        self.assertTrue(caught.exception.expected)
+        self.assertEqual(caught.exception.orig_msg, "TMUSIC_SOURCE_AUDIO_UNAVAILABLE")
+        request.assert_called_once()
+
+    def test_video_keeps_its_existing_video_and_audio_formats(self):
+        self.install_policy()
+        request = self.respond_with(self.public_item_page({
+            "id": "123", "video": {"playAddr": "https://v77.tiktokcdn.com/video/track.mp4"},
+            "music": {"playUrl": "https://v77.tiktokcdn.com/audio/track.m4a"},
+        }))
+        result = self.extractor._real_extract("https://www.tiktok.com/@creator/video/123")
+        self.assertEqual({f["format_id"] for f in result["formats"]}, {"play", "audio"})
+        request.assert_called_once()
+
+    def test_changed_url_selector_is_rejected_before_policy_mutation(self):
+        original_handler = TikTokBaseIE._download_webpage_handle
+        with mock.patch.object(self.selector, "_VALID_URL", r"https://unexpected\.invalid/"):
+            with self.assertRaises(launcher.CompatibilityError):
+                self.install_policy()
+        self.assertIs(TikTokBaseIE._download_webpage_handle, original_handler)
+
+    def test_missing_or_changed_photo_extraction_hook_fails_closed(self):
+        original_handler = TikTokBaseIE._download_webpage_handle
+        for hook in (None, lambda self: None):
+            with self.subTest(hook=hook), mock.patch.object(TikTokIE, "_real_extract", hook):
+                with self.assertRaises(launcher.CompatibilityError):
+                    self.install_policy()
+                self.assertIs(TikTokBaseIE._download_webpage_handle, original_handler)
 
     def test_public_page_uses_original_handler_without_impersonation(self):
         original_handler = InfoExtractor._download_webpage_handle
@@ -228,7 +324,7 @@ class TikTokPolicyTests(unittest.TestCase):
         for name in (
             "_generate_blockbuster_headers", "_download_webpage_handle",
             "_solve_challenge_and_set_cookies", "_extract_web_data_and_status",
-            "_get_universal_data",
+            "_get_universal_data", "_extract_web_formats", "_parse_aweme_video_web",
         ):
             with self.subTest(member=name), mock.patch.object(TikTokBaseIE, name, None):
                 with self.assertRaises(launcher.CompatibilityError):

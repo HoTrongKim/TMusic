@@ -17,7 +17,12 @@ BUNDLE_PATH = Path("/usr/local/lib/tmusic/yt-dlp.pyz")
 SUPPORTED_VERSION = "2026.10.26"
 USER_AGENT = "TMusic/2.0"
 ACCESS_CHECK_ERROR = "TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED"
+AUDIO_UNAVAILABLE_ERROR = "TMUSIC_SOURCE_AUDIO_UNAVAILABLE"
 COMPATIBILITY_ERROR = "TMUSIC_YTDLP_COMPATIBILITY_ERROR"
+TIKTOK_VIDEO_URL_PATTERN = (
+    r"https?://www\.tiktokv?\.com/(?:embed|(?:share|@(?P<user_id>[\w\.-]+)?)/video)/(?P<id>\d+)")
+TIKTOK_MEDIA_URL_PATTERN = (
+    r"https?://www\.tiktokv?\.com/(?:embed|(?:share|@(?P<user_id>[\w\.-]+)?)/(?P<media_type>video|photo))/(?P<id>\d+)")
 
 
 class CompatibilityError(RuntimeError):
@@ -47,6 +52,21 @@ def apply_tiktok_policy(version, tiktok_base, extractor_error):
     if version != SUPPORTED_VERSION:
         raise CompatibilityError(COMPATIBILITY_ERROR)
 
+    # The pinned CLI uses a lazy URL selector before instantiating TikTokIE.
+    # Validate both selectors before enabling the same reviewed photo route.
+    try:
+        from yt_dlp.extractor import get_info_extractor
+        from yt_dlp.extractor.tiktok import TikTokIE
+        selectors = tuple(dict.fromkeys((TikTokIE, get_info_extractor("TikTok"))))
+    except (ImportError, KeyError, AttributeError) as error:
+        raise CompatibilityError(COMPATIBILITY_ERROR) from error
+    for selector in selectors:
+        if getattr(selector, "_VALID_URL", None) != TIKTOK_VIDEO_URL_PATTERN:
+            raise CompatibilityError(COMPATIBILITY_ERROR)
+    if (not callable(getattr(TikTokIE, "_real_extract", None))
+            or tuple(inspect.signature(TikTokIE._real_extract).parameters) != ("self", "url")):
+        raise CompatibilityError(COMPATIBILITY_ERROR)
+
     expected_parameters = {
         "_generate_blockbuster_headers": ("min_headers", "max_headers"),
         "_download_webpage_handle": (
@@ -55,6 +75,8 @@ def apply_tiktok_policy(version, tiktok_base, extractor_error):
         "_solve_challenge_and_set_cookies": ("webpage",),
         "_extract_web_data_and_status": ("url", "video_id", "fatal"),
         "_get_universal_data": ("webpage", "display_id"),
+        "_extract_web_formats": ("aweme_detail",),
+        "_parse_aweme_video_web": ("aweme_detail", "webpage_url", "video_id", "extract_flat"),
     }
     for name, expected in expected_parameters.items():
         method = getattr(tiktok_base, name, None)
@@ -70,6 +92,7 @@ def apply_tiktok_policy(version, tiktok_base, extractor_error):
             raise CompatibilityError(COMPATIBILITY_ERROR)
 
     original_download = tiktok_base._download_webpage_handle
+    original_extract = TikTokIE._real_extract
     download_signature = inspect.signature(original_download)
 
     def honest_headers(*, min_headers=2, max_headers=8):
@@ -96,9 +119,28 @@ def apply_tiktok_policy(version, tiktok_base, extractor_error):
                    else "Unexpected response from webpage request")
         raise extractor_error(message, expected=True)
 
+    @wraps(original_extract)
+    def public_soundtrack(self, url):
+        is_photo = self._match_valid_url(url).group("media_type") == "photo"
+        # Upstream already requests the ordinary /video/<id> page and reads its
+        # public music.playUrl. Photo URLs only enable that existing path.
+        result = original_extract(self, url)
+        if is_photo:
+            formats = [audio for audio in result.get("formats") or []
+                       if audio.get("format_id") == "audio" and audio.get("vcodec") == "none"]
+            if not formats:
+                raise extractor_error(AUDIO_UNAVAILABLE_ERROR, expected=True)
+            result["formats"] = formats
+        return result
+
     tiktok_base._generate_blockbuster_headers = staticmethod(honest_headers)
     tiktok_base._download_webpage_handle = public_webpage
     tiktok_base._solve_challenge_and_set_cookies = reject_challenge
+    TikTokIE._real_extract = public_soundtrack
+    for selector in selectors:
+        selector._VALID_URL = TIKTOK_MEDIA_URL_PATTERN
+        if "_VALID_URL_RE" in selector.__dict__:
+            delattr(selector, "_VALID_URL_RE")
 
 
 def main(argv=None):

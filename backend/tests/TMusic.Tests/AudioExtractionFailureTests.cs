@@ -5,6 +5,17 @@ namespace TMusic.Tests;
 
 public sealed class AudioExtractionFailureTests
 {
+    [Fact]
+    public void MissingPublicSoundtrackStopsRetriesWithoutExposingEngineDetails()
+    {
+        var error = YtDlpAudioExtractor.ClassifyFailure("tiktok",
+            "ERROR: TMUSIC_SOURCE_AUDIO_UNAVAILABLE: https://example.invalid/media?token=fixture-only");
+        Assert.Equal("SOURCE_AUDIO_UNAVAILABLE", error.Code);
+        Assert.False(error.Retryable);
+        Assert.Equal(error.Code, error.Message);
+        Assert.Null(error.InnerException);
+    }
+
     [Theory]
     [InlineData("tiktok", "ERROR: TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED: source requires an access check")]
     [InlineData("youtube", "ERROR: TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED")]
