@@ -80,7 +80,7 @@ Script dùng file `docker-compose.autostart.yml` cùng file Compose gốc, đọ
 
 Sau khi các container được tạo thành công, Docker sẽ thử khởi động lại chúng khi Docker Engine hoạt động trở lại, miễn là chúng không bị dừng thủ công. Máy vẫn cần bật và có mạng; mở Docker không tự bật máy. Không dùng `docker compose down -v` nếu cần giữ database và file. Mật khẩu trong `.local/sql-docker-password.xml` gắn với tài khoản Windows đã tạo nó; cần có cách sao lưu thông tin truy cập phù hợp trước khi chuyển máy.
 
-Profile `internet` là chỗ dành cho Cloudflare Tunnel **đã được cấu hình riêng** và chưa tự hoạt động nếu chưa có token/tunnel và tên miền. API trong stack này đang ở chế độ phát triển và chỉ dành cho kiểm thử cục bộ; không coi cấu hình này là triển khai công khai an toàn. Đường hầm tạm đang trỏ tới API cũ trên cổng 5079, không tự chuyển sang API Docker; sau khi khởi động lại máy, tên miền tạm có thể đổi và IPA cũ mất kết nối. Cần chuẩn bị tunnel ổn định, cấu hình an toàn và kiểm thử trước khi đưa ra Internet.
+Profile `internet` dành cho Cloudflare Tunnel **đã được cấu hình riêng** và chưa tự hoạt động nếu thiếu token/tunnel và tên miền. Thử nghiệm hiện dùng Quick Tunnel riêng trỏ tới API Docker cổng 5080 và Worker gateway có địa chỉ cố định. Sau khi khởi động lại máy/tunnel, URL Quick Tunnel có thể đổi; cần cập nhật secret upstream của Worker, gateway không tự phát hiện URL mới. API trong stack đang ở chế độ phát triển; không coi đây là cấu hình production. Cần tunnel ổn định và cấu hình triển khai phù hợp trước khi phục vụ lâu dài.
 
 ```powershell
 # Khởi chạy SQL Server 2022 cục bộ và Mailpit (chỉ dành cho dev)
@@ -97,7 +97,7 @@ docker build --build-arg INSTALL_AUDIO_TOOLS=true -f backend/Worker.Dockerfile -
 
 ### Lưu ý vận hành Production
 1. Bắt buộc chạy sau reverse proxy TLS (`HTTPS`) — bản build Release của Flutter từ chối `TMUSIC_API_URL` không dùng `https://`.
-2. Gắn volume bền vững, writable cho runtime user, cho `DataProtection:KeyPath`, `Storage:CoversPath` và `Storage:AudioPath`. API/Worker tách dịch vụ phải dùng cùng audio storage. Compose hiện chỉ định nghĩa SQL Server/Mailpit, chưa ghép hai app container.
+2. Gắn volume bền vững, writable cho runtime user, cho `DataProtection:KeyPath`, `Storage:CoversPath` và `Storage:AudioPath`. API/Worker tách dịch vụ phải dùng cùng audio storage. Compose gốc định nghĩa SQL Server/Mailpit; overlay `docker-compose.autostart.yml` ghép API và worker với cùng volume `/data`.
 3. Cung cấp khóa ký JWT, mật khẩu SMTP và API keys từ Secret Manager của hạ tầng triển khai.
 4. Image cơ bản không cài audio tools. Opt-in build cài Python3/FFmpeg và yt-dlp2026.10.26 có SHA256 pin; runtime vẫn cần `Features__EnableAudioDownloads=true`. Launcher TikTok chỉ xử lý trang công khai, tắt browser impersonation/header ngẫu nhiên và không chạy trình giải challenge upstream. Hai image audio đã được build trên Docker Linux; xem `BUILD_LOG.md` cho kết quả tải thực tế và `PROVIDER_INTEGRATION.md` cho giới hạn/runtime egress. Khi nâng yt-dlp phải review và kiểm thử lại adapter gắn với phiên bản đã pin.
 
