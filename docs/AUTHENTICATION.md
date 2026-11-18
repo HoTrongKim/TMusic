@@ -1,8 +1,8 @@
 # AUTHENTICATION & SESSION SECURITY — TMUSIC V2
 
-## 1. Mô Hình Account-First
+## 1. Chế độ khách và tài khoản
 
-- Không có chế độ khách (Guest mode). Mọi route thư viện trên Flutter (`GoRouter` redirect) và mọi endpoint dữ liệu cá nhân trên ASP.NET Core (`RequireAuthorization()`) đều yêu cầu phiên đăng nhập hợp lệ.
+- Chế độ khách lưu album, bài hát và tệp audio trên thiết bị; dữ liệu khách mất khi gỡ ứng dụng nếu chưa đồng bộ vào tài khoản. Các endpoint dữ liệu tài khoản trên ASP.NET Core yêu cầu đăng nhập và kiểm tra chủ sở hữu; nhận diện/trích xuất dành cho khách dùng endpoint công khai riêng, có rate limit và xác nhận quyền tải.
 - Mỗi người dùng có một định danh nội bộ duy nhất `Account.Id` (`Guid`). Nhiều phương thức đăng nhập (`password`, `google`, `apple`) có thể gắn vào cùng một tài khoản sau khi chứng minh quyền sở hữu.
 
 ---
@@ -24,6 +24,8 @@
 
 ### 3.1. Google Sign-In
 - Mobile dùng `google_sign_in` (`GoogleSignIn.instance.initialize` qua Android Credential Manager) lấy OIDC `idToken` (không bao giờ dùng Google access token làm session token nội bộ).
+- Build Android thử nghiệm có Google: `./scripts/build-android.ps1`. Script đọc tên cấu hình hiện có, chỉ xuất API URL và client ID công khai vào `.local/artifacts/android-public-defines.json`, rồi tạo APK debug đã ký bằng chứng chỉ debug hiện có. Không đóng gói `.env`, client secret hoặc khóa backend. Dùng `-Mode release` chỉ khi đã cấu hình đủ keystore thật; đường dẫn keystore tương đối được tính từ thư mục gốc dự án.
+- Build iOS trên GitHub Actions dùng `TMUSIC_GOOGLE_SERVER_CLIENT_ID` và `TMUSIC_GOOGLE_IOS_CLIENT_ID` đã lưu trong Actions secrets. `scripts/prepare_mobile_oauth.py` xác thực và chuẩn hóa ID, tạo public Dart defines và thêm URL scheme đảo ngược vào bản `Info.plist` dùng để build. File IPA chưa ký cần được ký/cài với bundle ID khớp đăng ký iOS trong Google Cloud.
 - **Yêu cầu cấu hình trên Android:** Trên Google Cloud Console (cùng project với Web Client ID dùng cho `TMUSIC_GOOGLE_SERVER_CLIENT_ID`), bắt buộc phải đăng ký thêm một **OAuth 2.0 Client ID loại Android** khớp tên gói `com.tmusic.tmusic` và dấu vân tay chứng chỉ ký APK (`SHA-1`); trên Android chỉ truyền `serverClientId` (Web Client ID) vào `g.initialize`, không truyền `clientId`. Nếu chưa đăng ký cặp `package + SHA-1`, Google Play Services trả lỗi `UNREGISTERED_ON_API_CONSOLE`.
 - Backend (`ExternalTokenVerifier`) tải JWKS chính thức qua HTTPS từ `https://accounts.google.com/.well-known/openid-configuration` (tắt auto-redirect & cookies), kiểm tra:
   - Chữ ký `RS256`

@@ -109,6 +109,26 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
         ];
     }
 
+    public static ProviderException ClassifyFailure(string provider, string standardError)
+    {
+        if (standardError.Contains("TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED", StringComparison.Ordinal))
+            return new ProviderException("SOURCE_ACCESS_CHECK_REQUIRED");
+
+        var nonRetryable = standardError.Contains("DRM", StringComparison.OrdinalIgnoreCase) ||
+                           standardError.Contains("Private video", StringComparison.OrdinalIgnoreCase) ||
+                           standardError.Contains("members-only", StringComparison.OrdinalIgnoreCase) ||
+                           standardError.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
+                           standardError.Contains("File is larger than max-filesize", StringComparison.OrdinalIgnoreCase);
+        if (nonRetryable)
+            return new ProviderException("SOURCE_RESTRICTED_OR_UNSUPPORTED");
+
+        if (provider == "tiktok" &&
+            standardError.Contains("Unexpected response from webpage request", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("SOURCE_RESPONSE_UNSUPPORTED");
+
+        return new ProviderException("AUDIO_EXTRACTION_FAILED", retryable: true);
+    }
+
     public async Task<string> ExtractMp3Async(
         string canonicalUrl,
         string workDir,
@@ -154,17 +174,9 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
                     }
                 }
             }, token);
-        var stderr = downloaded.StandardError;
         if (downloaded.ExitCode != 0)
         {
-            var nonRetryable = stderr.Contains("DRM", StringComparison.OrdinalIgnoreCase) ||
-                               stderr.Contains("Private video", StringComparison.OrdinalIgnoreCase) ||
-                               stderr.Contains("members-only", StringComparison.OrdinalIgnoreCase) ||
-                               stderr.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
-                               stderr.Contains("File is larger than max-filesize", StringComparison.OrdinalIgnoreCase);
-            throw new ProviderException(
-                nonRetryable ? "SOURCE_RESTRICTED_OR_UNSUPPORTED" : "AUDIO_EXTRACTION_FAILED",
-                retryable: !nonRetryable);
+            throw ClassifyFailure(source.Provider, downloaded.StandardError);
         }
 
         await onProgress(95, token);
@@ -346,31 +358,42 @@ public sealed class AudioDownloadProcessor(
     {
         db.ChangeTracker.Clear();
         var job = await db.AudioDownloadJobs
+            .AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == id && x.LeaseOwner == lease && x.Status == ImportStatus.Running, ct);
         if (job is null) return;
 
         var now = clock.GetUtcNow();
-        job.Failures++;
-        job.ErrorCode = code;
-        job.LeaseOwner = null;
-        job.LeaseUntil = null;
+        var failures = job.Failures + 1;
+        var willRetry = retryable && failures < 3;
+        var nextAttempt = willRetry
+            ? now.AddSeconds(Math.Pow(2, failures) + Random.Shared.NextDouble() * 2)
+            : job.NextAttemptAt;
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // Acquire the job write lock first, matching cancellation's lock order. A stale
+        // failure handler must not change the song after its lease has been revoked.
+        var changed = await db.AudioDownloadJobs
+            .Where(x => x.Id == id && x.OwnerId == job.OwnerId &&
+                x.LeaseOwner == lease && x.Status == ImportStatus.Running)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Failures, failures)
+                .SetProperty(x => x.ErrorCode, code)
+                .SetProperty(x => x.LeaseOwner, (Guid?)null)
+                .SetProperty(x => x.LeaseUntil, (DateTimeOffset?)null)
+                .SetProperty(x => x.Status, willRetry ? ImportStatus.Queued : ImportStatus.Failed)
+                .SetProperty(x => x.NextAttemptAt, nextAttempt)
+                .SetProperty(x => x.CompletedAt, willRetry ? (DateTimeOffset?)null : now), ct);
+        if (changed == 0) return;
 
-        if (retryable && job.Failures < 3)
+        if (!willRetry)
         {
-            job.Status = ImportStatus.Queued;
-            job.NextAttemptAt = now.AddSeconds(Math.Pow(2, job.Failures) + Random.Shared.NextDouble() * 2);
-        }
-        else
-        {
-            job.Status = ImportStatus.Failed;
-            job.CompletedAt = now;
             await db.UserLibrarySongs
-                .Where(x => x.Id == job.UserLibrarySongId && x.UserId == job.OwnerId && x.AudioFileName == null)
+                .Where(x => x.Id == job.UserLibrarySongId && x.UserId == job.OwnerId)
                 .ExecuteUpdateAsync(s => s
-                    .SetProperty(x => x.AudioStatus, ImportStatus.Failed)
+                    .SetProperty(x => x.AudioStatus,
+                        x => x.AudioFileName == null ? ImportStatus.Failed : ImportStatus.Ready)
                     .SetProperty(x => x.UpdatedAt, now), ct);
         }
 
-        try { await db.SaveChangesAsync(ct); } catch (DbUpdateConcurrencyException) { }
+        await tx.CommitAsync(ct);
     }
 }

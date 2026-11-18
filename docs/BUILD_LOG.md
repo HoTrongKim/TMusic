@@ -168,3 +168,94 @@ Hoàn thành theo bốn yêu cầu giao diện/lỗi đăng nhập của ngườ
 
 - Tạo Cloudflare Quick Tunnel tạm tới API cục bộ, đặt origin Host là `localhost:5079`; kiểm tra HTTPS `/health/ready` bằng DNS-over-HTTPS và `curl --resolve`: HTTP 200.
 - Kiểm tra cấu trúc workflow iOS bằng PyYAML: input `api_url` bắt buộc và được truyền làm `TMUSIC_API_URL`. Chưa kiểm tra cài đặt hoặc các chức năng trên iPhone; tunnel thử nghiệm không có địa chỉ ổn định.
+- GitHub Actions run `44356840372`: Flutter analyze, Flutter test, build iOS không ký và tải artifact đều thành công. Sau build, kiểm tra HTTPS readiness qua tunnel trả HTTP 200. Chưa kiểm tra đăng nhập, tải nhạc hoặc cài trên iPhone.
+
+## 2026-11-19 — Docker API và worker tự khởi động
+
+- `docker compose -f docker-compose.yml -f docker-compose.autostart.yml config --quiet`: thành công với giá trị kiểm tra tạm.
+- `./scripts/start-docker-stack.ps1`: build API và worker thành công, khởi động cùng SQL Server V2 hiện có. FFmpeg và yt-dlp 2026.10.26 có thể chạy trong cả hai container.
+- `GET http://127.0.0.1:5080/health/ready`: HTTP 200 trước và sau `docker restart` hai container API/worker; SQL, API và worker có restart policy `unless-stopped`. Kiểm tra ghi từ API và đọc/xóa từ worker trên volume audio chung: thành công.
+- Chưa thử khởi động lại toàn bộ Docker Desktop hoặc máy, chưa cấu hình tunnel cố định vì chưa có tên miền Cloudflare; chưa kiểm thử tải nhạc thực tế hoặc luồng app trên iPhone. API Docker hiện là cấu hình phát triển, không sẵn sàng công khai.
+
+## 2026-11-19 — Thử nghiệm địa chỉ cố định workers.dev
+
+- `node --test cloudflare/test/gateway.test.mjs`: 4 kiểm thử thành công, gồm từ chối upstream không hợp lệ, chuyển tiếp yêu cầu và ngăn đường dẫn đổi máy chủ đích.
+- `npx --yes wrangler deploy --dry-run`: thành công. Triển khai thật chưa thành công vì Cloudflare yêu cầu tạo subdomain workers.dev cho tài khoản trước. Chưa xác minh gateway trên mạng hoặc build lại IPA với địa chỉ mới.
+- Đây là giải pháp thử nghiệm với Quick Tunnel có địa chỉ thay đổi; không dùng cho production. Tên `workers.dev` ổn định không làm cho Quick Tunnel ổn định hoặc tự cập nhật đích sau khi máy khởi động lại.
+
+## 2026-11-19 — Build IPA thử lại nhận diện liên kết
+
+- Kiểm tra API `/health/ready` và thử nhận diện một liên kết YouTube công khai qua cả API Docker và gateway: HTTP 200. Chưa tái hiện được link người dùng gặp lỗi.
+- GitHub Actions run `44366450604`: Flutter analyze, Flutter test, build iOS không ký và tải artifact thành công. Xác minh IPA tải về bằng `zipfile.testzip()` và xác nhận có địa chỉ gateway cố định trong binary.
+- Chưa sửa nguyên nhân lỗi nhận diện hoặc kiểm thử cài đặt trên iPhone; chưa khẳng định bản build mới sẽ khắc phục lỗi đã báo.
+
+## 2026-11-19 — Sửa cấu hình nhận diện TikTok trong Docker
+
+- Tái hiện link TikTok người dùng cung cấp: API Docker trả HTTP 422 `TIKTOK_IMPORT_DISABLED`, do cấu hình Docker kế thừa cờ tắt từ môi trường.
+- Bật `Features__EnableTikTokVideoImport` và `Features__EnableSoundCloudImport` cho API và worker trong `docker-compose.autostart.yml`; build và khởi động lại các container thành công.
+- Kiểm tra lại cùng link ở endpoint nhận diện khách: API cục bộ và gateway đều HTTP 200, provider `tiktok`; capabilities báo TikTok và SoundCloud đã bật.
+- Chưa kiểm thử endpoint của tài khoản người dùng trên iPhone hoặc tải MP3 thực tế; không có xác nhận về các link khác.
+
+## 2026-11-19 — Kiểm tra báo thiếu MP3
+
+- Kiểm tra SQL Docker chỉ đọc: một tác vụ TikTok ban đầu ở trạng thái `COMPLETE`/100% và bài báo `READY`. Ở lần kiểm tra sau, không còn bài/tác vụ đó và volume audio Docker không còn file MP3; chưa xác định nguyên nhân trạng thái thay đổi.
+- Chưa thay đổi hoặc xóa dữ liệu người dùng; cần một lần thử mới từ thiết bị để phân biệt quá trình tải, lưu file và phát nhạc. Không kết luận đã sửa lỗi.
+
+## 2026-11-19 — Khôi phục file MP3 bị lưu nhầm kho
+
+- Tái hiện: database V2 báo một tác vụ TikTok `COMPLETE`, file 1.129.398 byte, nhưng volume audio Docker trống. API thử nghiệm cũ trên Windows và worker Docker cùng xử lý tác vụ, khiến file của tiến trình cũ được ghi vào thư mục Windows thay vì volume Docker.
+- Dừng riêng tiến trình API thử nghiệm cũ trên cổng 5079 sau khi xác nhận gateway đang trỏ tới API Docker; vô hiệu hóa xử lý tác vụ trong script thử nghiệm cũ để tránh tranh chấp nếu chạy lại.
+- Sao chép file khớp metadata từ Windows vào volume Docker, giữ nguyên bản gốc; kiểm tra SHA-256 khớp, API và worker đều thấy file có kích thước và header MP3 hợp lệ. Gateway readiness HTTP 200.
+- Người dùng xác nhận đã phát được bài trên iPhone sau khi khôi phục file. Không dùng thao tác reset hoặc xóa database; chưa kiểm tra tất cả nguồn hoặc các lần tải mới.
+
+## 2026-11-19 — Build lại Docker theo yêu cầu
+
+- `./scripts/start-docker-stack.ps1`: build lại API/worker thành công và khởi động lại container; SQL Server tiếp tục dùng volume hiện hữu, API và worker dùng cùng volume audio.
+- Kiểm tra gateway readiness HTTP 200 và endpoint nhận diện khách với liên kết TikTok đã báo trước đó cùng một liên kết YouTube công khai: đều HTTP 200. Capabilities cho biết TikTok và SoundCloud được bật.
+- Chưa thử nhận diện bằng phiên đăng nhập trên iPhone hoặc liên kết mới gây lỗi. Tại thời điểm kiểm tra, `UserLibrarySongs` và `AudioDownloadJobs` không có bản ghi; không có thao tác reset hay xóa database trong lượt kiểm tra này, và chưa xác định thời điểm dữ liệu thay đổi.
+
+## 2026-11-19 — Kiểm tra lỗi trích xuất TikTok
+
+- Tác vụ người dùng: `FAILED`, `AUDIO_EXTRACTION_FAILED`, đã thử 3 lần; API/worker và gateway đang chạy, chức năng audio báo đã cấu hình.
+- Kiểm tra không tải media bằng yt-dlp qua cùng proxy giới hạn mạng và allowlist của ứng dụng: exit code 1; chẩn đoán được lỗi `Unexpected response from webpage request` của trình trích xuất TikTok. Không có đích mạng bị proxy từ chối trong lần kiểm tra đó.
+- `yt-dlp --version`: `2026.10.26`, trùng bản stable mới nhất được GitHub báo tại thời điểm kiểm tra; FFmpeg có sẵn. Chưa xác định được nội dung phản hồi bất thường hoặc khẳng định nguyên nhân là login/chặn bot; không bỏ qua bất kỳ giới hạn nguồn nào và chưa sửa được lỗi tải.
+- Kiểm tra lại khi lỗi tái diễn: gateway `/health/ready` và nhận diện link trong ảnh đều trả HTTP 200. Tiện ích chẩn đoán cục bộ chạy trong worker, dùng `SafeHttpTransport` với hostname TikTok cố định, giới hạn thời gian và kích thước đọc, xác nhận trang nguồn trả HTTP 200 nhưng có dấu hiệu kiểm tra truy cập và thiếu dữ liệu video. Probe `--skip-download` qua proxy hiện có tái hiện `Unexpected response from webpage request` với link trong ảnh và một link TikTok từng tải được. Không cần rebuild để kiểm tra tình trạng này; chưa khôi phục được tải MP3 cho các link đã thử.
+
+## 2026-11-19 — Sửa và xác minh tải MP3 TikTok thực tế
+
+- Sau chẩn đoán trên, thử request công khai với User-Agent minh bạch `TMusic/2.0`, tắt browser impersonation/header ngẫu nhiên và vô hiệu hóa hàm giải challenge của yt-dlp: cùng link TikTok trong ảnh đã tải được qua proxy/DNS pinning/allowlist hiện có. Không dùng cookie tài khoản, proxy ngoài, dịch vụ tải hộ hoặc cơ chế vượt kiểm tra truy cập.
+- Thêm launcher `backend/tools/yt_dlp_safe.py` cho cả hai Docker image; bundle upstream đã kiểm SHA giữ riêng, adapter kiểm đúng version `2026.10.26` và các hook trước khi chạy. C# phân loại lỗi access-check/phản hồi không được hỗ trợ thành lỗi không retry; lỗi mạng tạm thời vẫn retry. Review phát hiện trang HTML lỗi có thể bị gán nhầm access-check; đã sửa và thêm regression cho HTML lỗi/JSON lỗi/markup nằm trong script.
+
+| Lệnh/kiểm tra | Kết quả thực tế |
+|---|---|
+| Classifier regression trước/sau sửa | RED 5 assertion đúng triệu chứng; GREEN 21/21. Không đưa stderr/URL vào lỗi trả về. |
+| `dotnet test backend/TMusic.slnx -c Release --no-restore --verbosity minimal` | 128 đạt, 31 SQL tests bỏ qua do chưa cấu hình SQL trong lần chạy này; exit 0. |
+| `dotnet test backend/tests/TMusic.Tests/TMusic.Tests.csproj -c Release --no-restore --filter 'FullyQualifiedName~AudioDownloadTests\|FullyQualifiedName~AudioDownloadCancellationTests\|FullyQualifiedName~AudioExtractionFailureTests\|FullyQualifiedName~AudioDownloadEgressTests\|FullyQualifiedName~LocalAudioConversionTests' --logger 'trx;LogFileName=tiktok-audio-regressions.trx' --results-directory .local/test-results --verbosity minimal` | Cấu hình SQL Docker qua biến môi trường chỉ trong tiến trình. **60/60 đạt, 0 bỏ qua**, gồm hàng đợi/lưu MP3 riêng/HTTP Range/ownership/hủy tác vụ trên database `TMusicV2Test_*` riêng và FFmpeg thật. Extractor của SQL E2E là fixture, không coi đây là live TikTok. |
+| `./scripts/start-docker-stack.ps1` sau review | Build API/worker thành công, version smoke check đạt, container mới chạy. SQL và volume audio hiện hữu được giữ nguyên. |
+| `docker exec tmusic_starter-worker-1 python3 -m unittest discover -s /tmp/tmusic-policy-tests -v` | **13/13 đạt** với bundle thật và bản launcher cài trong image cuối. Xác minh HTTP403/login/challenge không gọi solver/cookie hoặc request tiếp; trang công khai dùng UA minh bạch, provider khác giữ handler cũ, version/hook không khớp thì dừng. |
+| SHA-256 launcher source so với executable trong API và worker | Khớp cả hai image. `.gitattributes` giữ LF cho Python shebang khi checkout trên Windows. |
+| POST `/api/v1/guest/songs/extract-mp3` với link `https://vt.tiktok.com/ZSpvygq7M/` và xác nhận quyền tải | API Docker **HTTP 200**, khoảng 6 giây; gateway mà IPA đang dùng **HTTP 200**, 5,8 giây trước review và **8 giây trên image cuối**. Tất cả trả `audio/mpeg`, **630.921 byte**, header MP3 hợp lệ. Không thêm bản ghi vào thư viện người dùng để thử nghiệm. |
+| FFmpeg giải mã toàn bộ MP3; ffprobe kiểm tra output | Exit 0; codec `mp3`, 44.100 Hz, stereo, **30,563265 giây**. Đây là kiểm tra file thực tế, không chỉ header. |
+| Gateway `/health/ready`, `.env`, Git diff | Readiness HTTP 200; hash `.env` trước/sau khớp; `git diff --check` đạt. Không migrate/reset/xóa database `TMusicDev` hoặc `TMusicV2Dev`; chỉ fixture tự tạo/dọn database kiểm thử riêng. |
+
+**Giới hạn:** Đã xác minh tải MP3 của link TikTok trên qua API/gateway và giải mã file; chưa bấm lại tác vụ thất bại hoặc phát trên iPhone bằng phiên của người dùng. Không sửa/build lại IPA trong lượt này. Đây là sửa ở backend; app đã dùng gateway hiện tại không cần build lại để nhận thay đổi. Không bảo đảm mọi URL TikTok tải được khi nguồn giới hạn truy cập, nội dung đã xóa/riêng tư hoặc phản hồi thay đổi; các gate vẫn bị từ chối. Công cụ Python áp dụng trong Docker image có audio tools, không tự thay executable yt-dlp trên Windows ngoài container.
+
+## 2026-11-19 — Google login, Android build và audit tám agent
+
+- Tám agent riêng rà soát Flutter Google login, backend identity, native/CI, provider/download, guest/library/share, audio runtime, deployment và final review. Chi tiết/phạm vi nằm trong `GOOGLE_LOGIN_AUDIT_2026-11-19.md`; giới hạn môi trường là bốn agent chạy đồng thời kể cả root nên thực hiện theo đợt.
+- Google SDK và endpoint xác minh token đã có. Bổ sung build helper chỉ xuất OAuth client ID công khai/API URL; script Android hỗ trợ tên môi trường hiện có và giữ `.env`; iOS CI thêm callback Google đảo ngược và Dart defines từ Actions secrets hiện có. Không bật thêm Apple login.
+- Các lỗi audit đã sửa bằng regression: mất khả năng phát MP3 cũ khi tải lại thất bại; failure handler ghi đè trạng thái sau khi hủy/xóa audio; MPEG-TS từ native HLS không chuyển đổi; executable hỏng làm worker thoát khỏi xử lý lỗi; mất thứ tự bài trong album khi claim guest. Sửa đường dẫn release keystore tương đối theo root dự án. Không thay signing credentials.
+
+| Lệnh/kiểm tra | Kết quả thực tế |
+|---|---|
+| `flutter analyze --no-pub` trên mã cuối | **No issues found**, exit 0. Đã sửa một lint thiếu braces trong test guest mới trước lần chạy cuối. |
+| `flutter test --no-pub --reporter expanded` trên mã cuối | **105/105 đạt**, exit 0; gồm Google/session/navigation và sáu guest-claim regressions mới. |
+| `dotnet test backend/TMusic.slnx -c Release --no-restore --logger 'trx;LogFileName=google-final-backend.trx' --results-directory .local/test-results --verbosity minimal` | **169/169 đạt, 0 bỏ qua** với SQL Server Docker và database fixture `TMusicV2Test_*`. TRX hoàn tất `2026-11-19T02:50:04+07:00`. Không migrate/reset database người dùng. Lần full suite trước đó có một lỗi Windows cleanup khóa file ở test hủy FFmpeg; test đạt trong hai focused runs và full suite cuối, chưa tái hiện nguyên nhân nên không tuyên bố đã sửa lỗi cancellation đó. |
+| Regression RED/GREEN theo agent | Guest-order: 5 ca RED trước sửa, cuối 6/6 GREEN. MPEG-TS và executable hỏng: RED đúng lỗi, local audio suite 9/9 GREEN. Failure/cancel: hai race RED, download SQL focused cuối 10/10 GREEN. Crypto kiểm tra RS256/HS256/RS512/expiry/nbf: 13/13 đạt. |
+| `python -m unittest discover -s scripts/tests -p test_prepare_mobile_oauth.py -v` | **8/8 đạt**, kiểm tra allowlist, alias, ID lỗi, iOS callback giữ cấu hình cũ và không ghi secrets. |
+| `node --test cloudflare/test/gateway.test.mjs` | **4/4 đạt**, exit 0. |
+| `./scripts/build-android.ps1 -Mode debug -BuildNumber 3` | Thành công; APK thử nghiệm tại `.local/artifacts/TMusic-android-debug-google.apk`, SHA-256 `22A3BAC1608B5E68259EE8746FD2676E01DCC41F6518B43D11EEF750200BDD20`. API URL là gateway hiện có. Chỉ còn cảnh báo JVM native-access và thông báo package mới ngoài dependency constraints. |
+| `apksigner verify --print-certs`, `aapt dump badging`, inspect `kernel_blob.bin` | Chữ ký hợp lệ; package `com.tmusic.tmusic`, version `2.0.0`, code **3**, ABI arm64-v8a/armeabi-v7a/x86_64. Đúng API URL và public Google server ID đã được biên dịch; không có `.env` trong ZIP. SHA-1 debug `64:2E:E3:D0:ED:B7:95:DE:51:DD:AC:C8:39:AE:D5:98:84:E0:7A:0A`. |
+| Android emulator | APK build đầu code 2 đã install `Success`; môi trường Android có Google Play Services. UI bị hộp thoại Android system ANR kể cả sau khởi động lại emulator, nên chưa xác nhận UI Google/account consent trên emulator. Không coi install/version inspection là bằng chứng đăng nhập Google thật. |
+
+**Giới hạn:** Chưa xác minh một phiên Google thật bằng tài khoản người dùng trên điện thoại; cần cặp package/chứng chỉ Android hoặc bundle iOS khớp đăng ký Google Cloud. APK hiện là debug đã ký để thử, không phải bản release dùng distribution keystore. Các giới hạn Quick Tunnel/development deployment và rate limit theo IP connector vẫn được ghi rõ trong audit; không tuyên bố 100% không bao giờ có lỗi. Kết quả Docker/CI/IPA mới được bổ sung sau khi triển khai xong.

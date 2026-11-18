@@ -39,4 +39,45 @@ public sealed class ExternalTokenSecurityTests
             ExternalTokenVerifier.ValidationParameters("google",["mobile-client"],[new RsaSecurityKey(trusted)]));
         Assert.False(result.IsValid);
     }
+
+    [Theory]
+    [InlineData(SecurityAlgorithms.RsaSha256, true)]
+    [InlineData(SecurityAlgorithms.RsaSha512, false)]
+    [InlineData(SecurityAlgorithms.HmacSha256, false)]
+    public async Task OnlyReviewedProviderSigningAlgorithmIsAccepted(string algorithm, bool expected)
+    {
+        using var rsa = RSA.Create(2048);
+        SecurityKey key = algorithm == SecurityAlgorithms.HmacSha256
+            ? new SymmetricSecurityKey(RandomNumberGenerator.GetBytes(32))
+            : new RsaSecurityKey(rsa);
+        var token = new JwtSecurityToken("https://accounts.google.com", "mobile-client",
+            [new Claim("sub", "subject")], DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
+            new SigningCredentials(key, algorithm));
+
+        var result = await new JsonWebTokenHandler().ValidateTokenAsync(
+            new JwtSecurityTokenHandler().WriteToken(token),
+            ExternalTokenVerifier.ValidationParameters("google", ["mobile-client"], [key]));
+
+        Assert.Equal(expected, result.IsValid);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingExpirationAndFutureNotBeforeAreRejected(bool futureNotBefore)
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var token = new JwtSecurityToken("https://accounts.google.com", "mobile-client",
+            [new Claim("sub", "subject")],
+            futureNotBefore ? DateTime.UtcNow.AddMinutes(5) : DateTime.UtcNow.AddMinutes(-1),
+            futureNotBefore ? DateTime.UtcNow.AddMinutes(10) : null,
+            new SigningCredentials(key, SecurityAlgorithms.RsaSha256));
+
+        var result = await new JsonWebTokenHandler().ValidateTokenAsync(
+            new JwtSecurityTokenHandler().WriteToken(token),
+            ExternalTokenVerifier.ValidationParameters("google", ["mobile-client"], [key]));
+
+        Assert.False(result.IsValid);
+    }
 }

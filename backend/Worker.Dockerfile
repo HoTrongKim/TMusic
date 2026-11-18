@@ -25,7 +25,16 @@ RUN set -eu; \
       false) ;; \
       *) echo 'INSTALL_AUDIO_TOOLS must be true or false.' >&2; exit 1 ;; \
     esac
+# Keep the verified upstream bundle intact; the launcher disables TikTok access-check solving.
+COPY backend/tools/yt_dlp_safe.py /opt/tmusic/yt_dlp_safe.py
+RUN if [ "$INSTALL_AUDIO_TOOLS" = true ]; then \
+      mkdir -p /usr/local/lib/tmusic; \
+      mv /usr/local/bin/yt-dlp /usr/local/lib/tmusic/yt-dlp.pyz; \
+      install -m 0755 /opt/tmusic/yt_dlp_safe.py /usr/local/bin/yt-dlp; \
+      test "$(yt-dlp --version)" = "$YT_DLP_VERSION"; \
+    fi
 WORKDIR /app
 COPY --from=build /out/ ./
+RUN mkdir -p /data/audio /data/covers /data/keys && chown -R "$APP_UID":0 /data
 USER $APP_UID
 ENTRYPOINT ["dotnet", "TMusic.Worker.dll"]

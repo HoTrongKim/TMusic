@@ -43,7 +43,7 @@ public static class LocalMp3Converter
         [
             "-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864",
             "-protocol_whitelist", "file,pipe",
-            "-format_whitelist", "mov,matroska,webm,mp3,aac,ogg,flac,wav",
+            "-format_whitelist", "mov,matroska,webm,mpegts,mp3,aac,ogg,flac,wav",
             "-probesize", "5242880", "-analyzeduration", "5000000", "-threads", "2",
             "-i", sourceFile,
             "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
@@ -75,7 +75,16 @@ public static class BoundedAudioProcess
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromMinutes(3));
         using var process = new Process { StartInfo = start };
-        if (!process.Start()) throw new ProviderException("AUDIO_ENGINE_UNAVAILABLE");
+        try
+        {
+            if (!process.Start()) throw new ProviderException("AUDIO_ENGINE_UNAVAILABLE");
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Missing execute permission or a damaged binary is a terminal engine error.
+            // Do not leak the executable path or leave a worker lease retrying indefinitely.
+            throw new ProviderException("AUDIO_ENGINE_UNAVAILABLE");
+        }
         process.StandardInput.Close();
         var output = ReadAsync(process.StandardOutput, capture: false, onOutputLine, deadline);
         var error = ReadAsync(process.StandardError, capture: true, null, deadline);

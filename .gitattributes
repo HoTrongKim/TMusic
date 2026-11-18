@@ -1,0 +1,3 @@
+# Python launchers copied into Linux containers need an LF shebang on Windows too.
+backend/tools/*.py text eol=lf
+backend/tools/tests/*.py text eol=lf

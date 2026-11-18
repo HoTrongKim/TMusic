@@ -28,6 +28,8 @@ TestResults/
 .test-artifacts/
 .local/
 *.log
+__pycache__/
+*.py[cod]
 .DS_Store
 
 /flutter-app-template/

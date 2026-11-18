@@ -68,6 +68,20 @@ Chọn mật khẩu mạnh theo yêu cầu của SQL Server và lưu tại nơi 
 
 Lệnh này chỉ khởi động SQL Server: nó không tạo database `TMusicV2Dev`, không chuyển dữ liệu và không tự đổi cấu hình kết nối của API. Database V2 và cấu hình API phải được thiết lập riêng trước khi sử dụng; không chạy migration lên `TMusicDev` cũ. Nếu cổng 1433 đã được dịch vụ khác sử dụng, cần chọn một cổng máy chủ còn trống và cập nhật kết nối API tương ứng.
 
+### Tự chạy SQL Server, API và worker trong Docker
+
+Sau khi instance SQL Docker đã được khởi tạo, migration V2 đã được áp dụng và `.local/sql-docker-password.xml` đã được tạo bằng tài khoản Windows hiện tại, chạy một lần:
+
+```powershell
+./scripts/start-docker-stack.ps1
+```
+
+Script dùng file `docker-compose.autostart.yml` cùng file Compose gốc, đọc mật khẩu SQL được Windows mã hóa và giữ nguyên `.env`. API và worker nhận cấu hình từ `.env` lúc tạo container, dùng volume Docker chung cho audio, ảnh bìa và khóa Data Protection, và được cấu hình `restart: unless-stopped` cùng database. Dữ liệu cấu hình được truyền vào môi trường container; không đưa `.env` hoặc mật khẩu vào Docker image hay Git. Chỉ dùng trên máy tin cậy và bảo vệ quyền truy cập Docker. API local thử nghiệm ở `http://127.0.0.1:5080/health/ready`.
+
+Sau khi các container được tạo thành công, Docker sẽ thử khởi động lại chúng khi Docker Engine hoạt động trở lại, miễn là chúng không bị dừng thủ công. Máy vẫn cần bật và có mạng; mở Docker không tự bật máy. Không dùng `docker compose down -v` nếu cần giữ database và file. Mật khẩu trong `.local/sql-docker-password.xml` gắn với tài khoản Windows đã tạo nó; cần có cách sao lưu thông tin truy cập phù hợp trước khi chuyển máy.
+
+Profile `internet` là chỗ dành cho Cloudflare Tunnel **đã được cấu hình riêng** và chưa tự hoạt động nếu chưa có token/tunnel và tên miền. API trong stack này đang ở chế độ phát triển và chỉ dành cho kiểm thử cục bộ; không coi cấu hình này là triển khai công khai an toàn. Đường hầm tạm đang trỏ tới API cũ trên cổng 5079, không tự chuyển sang API Docker; sau khi khởi động lại máy, tên miền tạm có thể đổi và IPA cũ mất kết nối. Cần chuẩn bị tunnel ổn định, cấu hình an toàn và kiểm thử trước khi đưa ra Internet.
+
 ```powershell
 # Khởi chạy SQL Server 2022 cục bộ và Mailpit (chỉ dành cho dev)
 docker compose --profile dev-mail up -d
@@ -85,7 +99,7 @@ docker build --build-arg INSTALL_AUDIO_TOOLS=true -f backend/Worker.Dockerfile -
 1. Bắt buộc chạy sau reverse proxy TLS (`HTTPS`) — bản build Release của Flutter từ chối `TMUSIC_API_URL` không dùng `https://`.
 2. Gắn volume bền vững, writable cho runtime user, cho `DataProtection:KeyPath`, `Storage:CoversPath` và `Storage:AudioPath`. API/Worker tách dịch vụ phải dùng cùng audio storage. Compose hiện chỉ định nghĩa SQL Server/Mailpit, chưa ghép hai app container.
 3. Cung cấp khóa ký JWT, mật khẩu SMTP và API keys từ Secret Manager của hạ tầng triển khai.
-4. Image cơ bản không cài audio tools. Opt-in build cài Python3/FFmpeg và yt-dlp2026.10.26 có SHA256 pin; runtime vẫn cần `Features__EnableAudioDownloads=true`. Dockerfile đã được kiểm tra cú pháp shell nhưng chưa build trên máy hiện tại do Docker Linux engine chưa chạy. Xem `PROVIDER_INTEGRATION.md` cho phạm vi runtime/egress và những kiểm thử chưa có; không coi version smoke check là live download test.
+4. Image cơ bản không cài audio tools. Opt-in build cài Python3/FFmpeg và yt-dlp2026.10.26 có SHA256 pin; runtime vẫn cần `Features__EnableAudioDownloads=true`. Launcher TikTok chỉ xử lý trang công khai, tắt browser impersonation/header ngẫu nhiên và không chạy trình giải challenge upstream. Hai image audio đã được build trên Docker Linux; xem `BUILD_LOG.md` cho kết quả tải thực tế và `PROVIDER_INTEGRATION.md` cho giới hạn/runtime egress. Khi nâng yt-dlp phải review và kiểm thử lại adapter gắn với phiên bản đã pin.
 
 ---
 

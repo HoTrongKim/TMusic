@@ -66,6 +66,16 @@ class LibraryRepository {
       if (isGuest || currentUserId() != userId) return false;
       final revision = guestStore.revision;
       final (guestAlbums, guestSongs) = await guestStore.exportAll();
+      final guestAlbumSongIds = <String, List<String>>{};
+      for (final album in guestAlbums) {
+        final ordered = await guestStore.listSongs(albumId: album.id);
+        guestAlbumSongIds[album.id] = ordered.items
+            .map((song) => song.id)
+            .toList();
+      }
+      if (guestStore.revision != revision || currentUserId() != userId) {
+        return false;
+      }
       final guestAudio = await openLocalLibrary('guest');
       final importedTracks = (await guestAudio.list())
           .where((track) => !track.id.startsWith('song:'))
@@ -91,6 +101,7 @@ class LibraryRepository {
 
       LocalLibrary? userAudio;
       final copiedGuestSongIds = <String>[];
+      final songIdMap = <String, String>{};
       for (final song in guestSongs.reversed) {
         if (currentUserId() != userId) return false;
         final mappedAlbums = song.albumIds
@@ -104,6 +115,7 @@ class LibraryRepository {
           mappedAlbums,
         );
         if (currentUserId() != userId) return false;
+        songIdMap[song.id] = saved.id;
         if (song.favorite && !saved.favorite) await favorite(saved);
         if (song.audioReady) {
           final track = await guestAudio.getDownloadedSongTrack(song);
@@ -113,6 +125,29 @@ class LibraryRepository {
             copiedGuestSongIds.add(song.id);
           }
         }
+      }
+      for (final guestAlbum in guestAlbums) {
+        if (currentUserId() != userId) return false;
+        final id = albumIdMap[guestAlbum.id]!;
+        final targetAlbum = await album(id);
+        final members = <String>[];
+        for (var page = 1; ; page++) {
+          if (currentUserId() != userId) return false;
+          final result = await songs(albumId: id, page: page);
+          members.addAll(result.items.map((song) => song.id));
+          if (!result.hasMore) break;
+        }
+        if (currentUserId() != userId) return false;
+        final claimed = guestAlbumSongIds[guestAlbum.id]!
+            .map((guestId) => songIdMap[guestId]!)
+            .toSet();
+        // A retry may reuse an album that now has other account songs.
+        // Keep those memberships and their relative order too.
+        if (!members.toSet().containsAll(claimed)) return false;
+        await order(targetAlbum, [
+          ...claimed,
+          ...members.where((songId) => !claimed.contains(songId)),
+        ]);
       }
       for (final track in importedTracks) {
         if (currentUserId() != userId) return false;

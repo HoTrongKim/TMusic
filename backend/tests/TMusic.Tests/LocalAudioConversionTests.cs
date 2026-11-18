@@ -71,11 +71,58 @@ public sealed class LocalAudioConversionTests
     }
 
     [FfmpegFact]
+    public async Task GeneratedMpegTsAudioConvertsWithRestrictedDemuxers()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "TMusicConversionTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var wav = Path.Combine(directory, "fixture.wav");
+            await File.WriteAllBytesAsync(wav, WavFixture());
+            var source = Path.Combine(directory, "source.media");
+            var wrapped = await BoundedAudioProcess.RunAsync(Ffmpeg(),
+                ["-nostdin", "-hide_banner", "-loglevel", "error", "-i", wav, "-c:a", "aac", "-f", "mpegts", "-y", source],
+                directory, null, CancellationToken.None);
+            Assert.Equal(0, wrapped.ExitCode);
+
+            var output = Path.Combine(directory, "track.mp3");
+            await LocalMp3Converter.ConvertAsync(Ffmpeg(), source, output, CancellationToken.None);
+            var bytes = await File.ReadAllBytesAsync(output);
+            Assert.True(bytes.Length > 100);
+            var storage = new AudioStorage(new ConfigurationBuilder().Build());
+            Assert.True(storage.IsValidMp3Header(bytes));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [FfmpegFact]
     public async Task ChildProcessOutputLimitStopsExcessiveOutput()
     {
         var error = await Assert.ThrowsAsync<ProviderException>(() => BoundedAudioProcess.RunAsync(Ffmpeg(),
             ["-hide_banner", "-h", "full"], Path.GetTempPath(), null, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal("AUDIO_ENGINE_OUTPUT_LIMIT", error.Code);
+    }
+
+    [Fact]
+    public async Task ExistingInvalidExecutableReturnsSanitizedEngineFailure()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "TMusicConversionTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var executable = Path.Combine(directory, "invalid-audio-engine.exe");
+            await File.WriteAllTextAsync(executable, "This is not an executable audio engine.");
+
+            var error = await Assert.ThrowsAsync<ProviderException>(() => BoundedAudioProcess.RunAsync(
+                executable, [], directory, null, CancellationToken.None));
+
+            Assert.Equal("AUDIO_ENGINE_UNAVAILABLE", error.Code);
+            Assert.False(error.Retryable);
+            Assert.Equal(error.Code, error.Message);
+            Assert.DoesNotContain(executable, error.ToString());
+            Assert.Null(error.InnerException);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     [FfmpegFact]

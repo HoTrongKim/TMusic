@@ -38,14 +38,24 @@ jobs:
         run: flutter analyze --no-pub
 
       - name: Chạy kiểm thử
-        run: flutter test --no-pub
+        run: |
+          flutter test --no-pub
+          python3 -m unittest discover -s ../scripts/tests -p test_prepare_mobile_oauth.py -v
 
       - name: Build iOS
         env:
           TMUSIC_BUILD_API_URL: ${{ inputs.api_url }}
+          TMUSIC_GOOGLE_SERVER_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_SERVER_CLIENT_ID }}
+          TMUSIC_GOOGLE_IOS_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_IOS_CLIENT_ID }}
         run: |
-          python3 -c 'import os, sys, urllib.parse; u = urllib.parse.urlsplit(os.environ["TMUSIC_BUILD_API_URL"]); sys.exit(0 if u.scheme == "https" and u.hostname and not (u.username or u.password or u.path not in ("", "/") or u.query or u.fragment) else 1)'
-          flutter build ios --release --no-codesign --no-pub --dart-define="TMUSIC_API_URL=$TMUSIC_BUILD_API_URL"
+          set -euo pipefail
+          python3 ../scripts/prepare_mobile_oauth.py \
+            --platform ios \
+            --output "$RUNNER_TEMP/tmusic-ios-public-defines.json" \
+            --info-plist ios/Runner/Info.plist
+          flutter build ios --release --no-codesign --no-pub \
+            --build-number "$GITHUB_RUN_NUMBER" \
+            --dart-define-from-file="$RUNNER_TEMP/tmusic-ios-public-defines.json"
 
       - name: Đóng gói IPA
         run: |

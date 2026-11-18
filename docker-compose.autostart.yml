@@ -1,0 +1,67 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_AUDIO_TOOLS: 'true'
+    env_file:
+      - path: .env
+        format: raw
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: '8080'
+      AllowedHosts: 'localhost;127.0.0.1;api'
+      ConnectionStrings__TMusic: ${TMUSIC_DOCKER_CONNECTION:?Set the Docker SQL connection in the setup script}
+      ConnectionStrings__DefaultConnection: ${TMUSIC_DOCKER_CONNECTION:?Set the Docker SQL connection in the setup script}
+      Storage__AudioPath: /data/audio
+      Storage__CoversPath: /data/covers
+      DataProtection__KeyPath: /data/keys
+      AudioDownload__RunInApiProcess: 'false'
+      Features__EnableAudioDownloads: 'true'
+      Features__EnableTikTokVideoImport: 'true'
+      Features__EnableSoundCloudImport: 'true'
+    ports:
+      - '127.0.0.1:5080:8080'
+    volumes:
+      - tmusic_app_data:/data
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Worker.Dockerfile
+      args:
+        INSTALL_AUDIO_TOOLS: 'true'
+    env_file:
+      - path: .env
+        format: raw
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__TMusic: ${TMUSIC_DOCKER_CONNECTION:?Set the Docker SQL connection in the setup script}
+      ConnectionStrings__DefaultConnection: ${TMUSIC_DOCKER_CONNECTION:?Set the Docker SQL connection in the setup script}
+      Storage__AudioPath: /data/audio
+      Features__EnableAudioDownloads: 'true'
+      Features__EnableTikTokVideoImport: 'true'
+      Features__EnableSoundCloudImport: 'true'
+    volumes:
+      - tmusic_app_data:/data
+    depends_on:
+      - db
+      - api
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ['internet']
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  tmusic_app_data:
