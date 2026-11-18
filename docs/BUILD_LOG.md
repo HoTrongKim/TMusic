@@ -284,3 +284,9 @@ Hoàn thành theo bốn yêu cầu giao diện/lỗi đăng nhập của ngườ
 - Source commit `426bc1d`; combined CI `44390943749` **success** (backend 171 đạt/7 FFmpeg tests bỏ qua/tổng 178; mobile analyze/test/build đạt), iOS run `44390944211` **success**. IPA mới build **7**, **10.211.436 byte**, SHA-256 `EAE818526547FAB7D71BE851E566111CD316750A0E1F5D1F01AB9230D399E06C`; ZIP/callback Google/client IDs/gateway/new error mapping trong AOT đều được kiểm tra. File `.local/artifacts/TMusic-google-unsigned.ipa` vẫn cần ký khi cài.
 - APK debug mới code **5** có error copy ở `.local/artifacts/TMusic.apk`, **178.959.878 byte**, SHA-256 `0F928B0E277AB6C90071BB6D42B50B2B7CBA8E3E7D8BBAEBD426447777FD3C57`, khớp build output và chữ ký hợp lệ. File đã được đổi tên từ tên build script; không tạo thêm keystore.
 - Docker API/worker mới dùng volume hiện hữu; `.env` byte-hash vẫn khớp. Bản IPA đang cài nhận sửa backend ngay, không cần cài lại để xử lý link này; IPA mới bổ sung cách giải thích lỗi rõ ràng hơn.
+
+## 2026-11-19 — Build lại Android theo yêu cầu
+
+- `./scripts/build-android.ps1 -Mode debug -BuildNumber 6`: thành công, Gradle assembleDebug 45,7 giây; không đổi mã ứng dụng. APK đã sao chép thành `.local/artifacts/TMusic-Android-2.0.0-build6.apk`, **178.959.882 byte**, SHA-256 `BDF6ED9CCE0A9F835972B68ABBF4C8704FC82E3391C124E64E2A435B825440D7`.
+- `apksigner verify --print-certs` đạt; giữ chứng chỉ debug SHA-1 `64:2E:E3:D0:ED:B7:95:DE:51:DD:AC:C8:39:AE:D5:98:84:E0:7A:0A`. `aapt dump badging`: package `com.tmusic.tmusic`, version `2.0.0`, code **6**, min API 24 và ba ABI arm64-v8a/armeabi-v7a/x86_64.
+- ZIP integrity, gateway HTTPS, public Google client ID và provider error mapping trong kernel đều đúng; không có `.env` trong APK. Hash `.env` trước/sau khớp. Chỉ build và kiểm tra artifact, không cài lên thiết bị, đổi Docker hoặc chạy lại full suite vì mã ứng dụng không thay đổi.
