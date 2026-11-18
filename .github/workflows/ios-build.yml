@@ -1,0 +1,55 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@v4
+
+      - name: Cài Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.0'
+          channel: stable
+          cache: true
+
+      - name: Cài dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Kiểm tra mã nguồn
+        run: flutter analyze --no-pub
+
+      - name: Chạy kiểm thử
+        run: flutter test --no-pub
+
+      - name: Build iOS
+        run: flutter build ios --release --no-codesign --no-pub
+
+      - name: Đóng gói IPA
+        run: |
+          set -euo pipefail
+          mkdir -p dist build/ios/iphoneos/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+          cd build/ios/iphoneos
+          zip -qry ../../../dist/TMusic-unsigned.ipa Payload
+
+      - name: Đăng tải IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: TMusic-unsigned-IPA
+          path: mobile/dist/TMusic-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
