@@ -56,6 +56,23 @@ String errorText(BuildContext context, Object error) {
   return context.tr('genericError');
 }
 
+String downloadFailureText(BuildContext context, String? errorCode) {
+  final key = switch (errorCode?.trim().toUpperCase()) {
+    'SOURCE_ACCESS_CHECK_REQUIRED' => 'sourceAccessCheckRequired',
+    'SOURCE_AUDIO_UNAVAILABLE' => 'sourceAudioUnavailable',
+    'SOURCE_RESPONSE_UNSUPPORTED' => 'sourceResponseUnsupported',
+    'SOURCE_UNAVAILABLE' => 'sourceContentUnavailable',
+    'AUDIO_CONVERSION_FAILED' => 'audioConversionFailed',
+    'RATE_LIMITED' => 'tooManyRequests',
+    'AUDIO_DOWNLOAD_UNAVAILABLE' ||
+    'AUDIO_ENGINE_UNAVAILABLE' ||
+    'AUDIO_DOWNLOAD_BUSY' ||
+    'PROVIDER_TEMPORARILY_UNAVAILABLE' => 'sourceTemporarilyUnavailable',
+    _ => 'mp3Failed',
+  };
+  return context.tr(key);
+}
+
 String? formatDuration(int? seconds) {
   if (seconds == null || seconds <= 0) return null;
   final h = seconds ~/ 3600;

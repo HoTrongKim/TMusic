@@ -44,7 +44,7 @@ public sealed class ExternalChallenge
 public sealed class UserSettings
 {
     public Guid UserId { get; set; }
-    public string Theme { get; set; } = "system";
+    public string Theme { get; set; } = "dark";
     public string Language { get; set; } = "vi";
     public bool NotificationsEnabled { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;

@@ -19,6 +19,13 @@ public interface IAudioExtractor
         string workDir,
         Func<int, CancellationToken, Task> onProgress,
         CancellationToken ct);
+
+    Task<string> ExtractMp3Async(
+        string canonicalUrl,
+        string workDir,
+        Func<int, CancellationToken, Task> onProgress,
+        int? bitrateKbps,
+        CancellationToken ct) => ExtractMp3Async(canonicalUrl, workDir, onProgress, ct);
 }
 
 public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioExtractor
@@ -111,18 +118,38 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
 
     public static ProviderException ClassifyFailure(string provider, string standardError)
     {
+        if (standardError.Contains("TMUSIC_YTDLP_COMPATIBILITY_ERROR", StringComparison.Ordinal))
+            return new ProviderException("AUDIO_ENGINE_UNAVAILABLE");
         if (standardError.Contains("TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED", StringComparison.Ordinal))
             return new ProviderException("SOURCE_ACCESS_CHECK_REQUIRED");
         if (standardError.Contains("TMUSIC_SOURCE_AUDIO_UNAVAILABLE", StringComparison.Ordinal))
             return new ProviderException("SOURCE_AUDIO_UNAVAILABLE");
 
+        if (standardError.Contains("Sign in to confirm you're not a bot", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("Sign in to confirm you\u2019re not a bot", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("SOURCE_ACCESS_CHECK_REQUIRED");
+
+        if (standardError.Contains("Requested format is not available", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("No video formats found", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("SOURCE_AUDIO_UNAVAILABLE");
+
         var nonRetryable = standardError.Contains("DRM", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("Private video", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("members-only", StringComparison.OrdinalIgnoreCase) ||
+                           standardError.Contains("Video unavailable", StringComparison.OrdinalIgnoreCase) ||
+                           standardError.Contains("This video is unavailable", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
+                           standardError.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("File is larger than max-filesize", StringComparison.OrdinalIgnoreCase);
         if (nonRetryable)
             return new ProviderException("SOURCE_RESTRICTED_OR_UNSUPPORTED");
+
+        if (standardError.Contains("HTTP Error 429", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("RATE_LIMITED", retryable: true);
+
+        if (standardError.Contains("Unable to extract", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("SOURCE_RESPONSE_UNSUPPORTED");
 
         if (provider == "tiktok" &&
             standardError.Contains("Unexpected response from webpage request", StringComparison.OrdinalIgnoreCase))
@@ -131,14 +158,40 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
         return new ProviderException("AUDIO_EXTRACTION_FAILED", retryable: true);
     }
 
+    public static bool IsRetryableErrorCode(string? errorCode) => errorCode?.Trim().ToUpperInvariant() switch
+    {
+        "SOURCE_ACCESS_CHECK_REQUIRED" or
+        "SOURCE_AUDIO_UNAVAILABLE" or
+        "SOURCE_RESTRICTED_OR_UNSUPPORTED" or
+        "SOURCE_RESPONSE_UNSUPPORTED" or
+        "SOURCE_UNAVAILABLE" or
+        "AUDIO_CONVERSION_FAILED" or
+        "AUDIO_INPUT_INVALID" or
+        "AUDIO_ENGINE_UNAVAILABLE" or
+        "RIGHTS_CONFIRMATION_REQUIRED" or
+        "INVALID_SOURCE_URL" or
+        "UNSUPPORTED_SOURCE_URL" or
+        "INVALID_BITRATE" => false,
+        _ => true
+    };
+
+    public Task<string> ExtractMp3Async(
+        string canonicalUrl,
+        string workDir,
+        Func<int, CancellationToken, Task> onProgress,
+        CancellationToken ct) => ExtractMp3Async(canonicalUrl, workDir, onProgress, null, ct);
+
     public async Task<string> ExtractMp3Async(
         string canonicalUrl,
         string workDir,
         Func<int, CancellationToken, Task> onProgress,
+        int? bitrateKbps,
         CancellationToken ct)
     {
         if (!config.GetValue("Features:EnableAudioDownloads", false))
             throw new ProviderException("AUDIO_DOWNLOAD_DISABLED");
+        if (!AudioBitrate.IsValid(bitrateKbps))
+            throw new ProviderException("INVALID_BITRATE");
 
         using var capacity = AudioExtractionCapacity.Acquire();
         var ytDlp = ResolveYtDlpPath() ?? throw new ProviderException("AUDIO_ENGINE_UNAVAILABLE");
@@ -183,7 +236,7 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
 
         await onProgress(95, token);
         var mp3File = Path.Combine(workDir, "track.mp3");
-        await LocalMp3Converter.ConvertAsync(ffmpeg, downloadedFile, mp3File, token);
+        await LocalMp3Converter.ConvertAsync(ffmpeg, downloadedFile, mp3File, token, bitrateKbps);
 
         return mp3File;
     }
@@ -307,6 +360,7 @@ public sealed class AudioDownloadProcessor(
                         .SetProperty(x => x.LeaseUntil, beat.AddMinutes(4)), innerCt);
                 if (changed == 0) throw new OperationCanceledException("Audio download lease was revoked.", innerCt);
             },
+            job.BitrateKbps,
             ct);
 
         var stored = await storage.SaveFromTempFileAsync(job.OwnerId, mp3Path, ct);

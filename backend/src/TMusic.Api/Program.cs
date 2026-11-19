@@ -15,6 +15,7 @@ using TMusic.Api.Providers;
 using TMusic.Api.Imports;
 using TMusic.Application.Identity;
 using TMusic.Infrastructure.Downloads;
+using TMusic.Infrastructure.Imports;
 using TMusic.Infrastructure.Identity;
 using TMusic.Infrastructure.Persistence;
 using TMusic.Infrastructure.Providers;
@@ -92,29 +93,46 @@ api.MapGet("/system/capabilities",(IExternalTokenVerifier verifier,IAccountMailS
     emailAuthentication=sessions.IsConfigured,passwordResetEmail=mail.IsConfigured,googleSignIn=verifier.Available("google"),appleSignIn=verifier.Available("apple"),
     youtubeMetadata=!string.IsNullOrWhiteSpace(c["YouTube:ApiKey"]),tikTokLinks=c.GetValue("Features:EnableTikTokVideoImport",true),
     soundCloudLinks=c.GetValue("Features:EnableSoundCloudImport",true),albumSharing=true,guestLocalMode=true,
-    multiPlaylistMerge=false,crossProviderMixedCollections=c.GetValue("Features:EnableCrossProviderMixedCollections",false),licensedAudioDownload=extractor.IsAvailable
+    multiPlaylistMerge=false,crossProviderMixedCollections=c.GetValue("Features:EnableCrossProviderMixedCollections",false),licensedAudioDownload=extractor.IsAvailable,
+    supportedAudioBitrates=AudioBitrate.Supported
 }));
 api.MapAccountEndpoints(); api.MapExternalAuthEndpoints(); api.MapAlbumEndpoints(); api.MapSongEndpoints();
 api.MapAudioDownloadEndpoints(); api.MapProviderEndpoints(); api.MapImportEndpoints();
 app.Run();
 public partial class Program { }
-public sealed class ApiDownloadBackgroundRunner(IServiceScopeFactory scopes,IConfiguration config,ILogger<ApiDownloadBackgroundRunner> logger) : BackgroundService
+public sealed class ApiDownloadBackgroundRunner(IServiceScopeFactory scopes,IConfiguration config,IAudioExtractor extractor,ILogger<ApiDownloadBackgroundRunner> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (config.GetValue("Features:EnableAudioDownloads",false))
+        {
+            if (extractor.IsAvailable) logger.LogInformation("Audio download tools validated at startup (yt-dlp and FFmpeg available).");
+            else logger.LogWarning("Audio downloads are enabled but required extraction binaries (yt-dlp / FFmpeg) were not found at startup.");
+        }
+        var nextCleanup = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                if (!config.GetValue("AudioDownload:RunInApiProcess",true)) { await Task.Delay(TimeSpan.FromSeconds(5),stoppingToken); continue; }
+                var runDownloads = config.GetValue("AudioDownload:RunInApiProcess",true);
+                var runImports = config.GetValue("Imports:RunInApiProcess",false);
+                if (!runDownloads && !runImports) { await Task.Delay(TimeSpan.FromSeconds(5),stoppingToken); continue; }
                 await using var scope=scopes.CreateAsyncScope();
-                var processor=scope.ServiceProvider.GetRequiredService<AudioDownloadProcessor>();
-                if (!await processor.ProcessOneAsync(stoppingToken)) await Task.Delay(TimeSpan.FromSeconds(1),stoppingToken);
+                var imports = runImports ? scope.ServiceProvider.GetRequiredService<ImportProcessor>() : null;
+                var now = scope.ServiceProvider.GetRequiredService<TimeProvider>().GetUtcNow();
+                if (imports is not null && now >= nextCleanup)
+                {
+                    await imports.PurgeExpiredAsync(stoppingToken);
+                    nextCleanup = now.AddMinutes(5);
+                }
+                if (runDownloads && await scope.ServiceProvider.GetRequiredService<AudioDownloadProcessor>().ProcessOneAsync(stoppingToken)) continue;
+                if (imports is not null && await imports.ProcessOneAsync(stoppingToken)) continue;
+                await Task.Delay(TimeSpan.FromSeconds(1),stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
             catch (Exception ex)
             {
-                logger.LogWarning("Background audio runner failed with {ErrorType}.",ex.GetType().Name);
+                logger.LogWarning("Background job runner failed with {ErrorType}.",ex.GetType().Name);
                 await Task.Delay(TimeSpan.FromSeconds(3),stoppingToken);
             }
         }

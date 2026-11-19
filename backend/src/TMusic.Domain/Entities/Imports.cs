@@ -76,6 +76,7 @@ public sealed class AudioDownloadJob : ImportWork
     public required string Provider { get; set; }
     public required string CanonicalUrl { get; set; }
     public bool RightsConfirmed { get; set; }
+    public int? BitrateKbps { get; set; }
     public int ProgressPercent { get; set; }
     public string? OutputFileName { get; set; }
     public long? OutputSizeBytes { get; set; }

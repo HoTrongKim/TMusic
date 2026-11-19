@@ -26,10 +26,18 @@ public static class AudioExtractionCapacity
     }
 }
 
+public static class AudioBitrate
+{
+    public static readonly int[] Supported = [128, 192, 320];
+    public static bool IsValid(int? bitrateKbps) => bitrateKbps is null or 128 or 192 or 320;
+}
+
 public static class LocalMp3Converter
 {
-    public static async Task ConvertAsync(string ffmpegExecutable, string sourceFile, string outputFile, CancellationToken ct)
+    public static async Task ConvertAsync(string ffmpegExecutable, string sourceFile, string outputFile, CancellationToken ct, int? bitrateKbps = null)
     {
+        if (!AudioBitrate.IsValid(bitrateKbps))
+            throw new ProviderException("INVALID_BITRATE");
         sourceFile = Path.GetFullPath(sourceFile);
         outputFile = Path.GetFullPath(outputFile);
         if (string.Equals(sourceFile, outputFile, StringComparison.OrdinalIgnoreCase) ||
@@ -39,6 +47,8 @@ public static class LocalMp3Converter
         // No ffprobe or yt-dlp postprocessor handles downloaded bytes. Restrict both protocols
         // and demuxers before opening the input: playlist/concat containers cannot read URLs or
         // additional local files. Only this explicitly constrained FFmpeg process decodes media.
+        var qualityFlag = bitrateKbps is { } kbps ? "-b:a" : "-q:a";
+        var qualityValue = bitrateKbps is { } b ? $"{b}k" : "2";
         var result = await BoundedAudioProcess.RunAsync(ffmpegExecutable,
         [
             "-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864",
@@ -47,7 +57,7 @@ public static class LocalMp3Converter
             "-probesize", "5242880", "-analyzeduration", "5000000", "-threads", "2",
             "-i", sourceFile,
             "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
-            "-c:a", "libmp3lame", "-q:a", "2", "-threads", "2",
+            "-c:a", "libmp3lame", qualityFlag, qualityValue, "-threads", "2",
             "-fs", AudioStorage.MaxAudioBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "-f", "mp3", "-y", outputFile
         ], Path.GetDirectoryName(sourceFile)!, null, ct);

@@ -56,7 +56,7 @@ class SpotifyGlassSurface extends StatelessWidget {
               ),
             ),
       ),
-      child: child,
+      child: Material(type: MaterialType.transparency, child: child),
     );
     if (context.reduceMotion) {
       return ClipRRect(borderRadius: borderRadius, child: box);

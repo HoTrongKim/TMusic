@@ -47,6 +47,7 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
   Song? _savedSong;
   String? _savedAlbumId;
   bool _offlineSaved = false;
+  int _selectedBitrateKbps = 192;
 
   Timer? _inputDebounce;
   Timer? _directJobPoll;
@@ -244,6 +245,7 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
         targetAlbums,
         downloadMp3: mp3Supported,
         rightsConfirmed: mp3Supported,
+        bitrateKbps: mp3Supported ? _selectedBitrateKbps : null,
       );
 
       if (_selectedAlbumId != null) {
@@ -556,7 +558,10 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
                   SmoothProgressBar(percent: watchedJob.progressPercent),
                   const SizedBox(height: 12),
                 ] else if (watchedJob?.status == 'FAILED') ...[
-                  Notice(context.tr('mp3Failed'), error: true),
+                  Notice(
+                    downloadFailureText(context, watchedJob?.errorCode),
+                    error: true,
+                  ),
                   const SizedBox(height: 8),
                 ] else ...[
                   Notice(
@@ -744,6 +749,39 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
                     ),
                   ],
                 ),
+                if (mp3Supported) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    context.tr('mp3BitrateLabel'),
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [128, 192, 320]
+                        .map(
+                          (kbps) => ChoiceChip(
+                            key: Key('bitrate-$kbps'),
+                            showCheckmark: false,
+                            label: Text('$kbps kbps'),
+                            selected: _selectedBitrateKbps == kbps,
+                            onSelected: _busy
+                                ? null
+                                : (_) {
+                                    TMusicHaptics.selection();
+                                    setState(() => _selectedBitrateKbps = kbps);
+                                  },
+                          ),
+                        )
+                        .toList(),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    context.tr('mp3BitrateNote'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: 14),
                 PressableScale(
                   enabled: !_busy && preview.capability != 'UNAVAILABLE',

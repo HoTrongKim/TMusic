@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tmusic/core/api/api_client.dart';
 import 'package:tmusic/core/widgets/common.dart';
+import 'package:tmusic/shared/models/library_models.dart';
 
 void main() {
   const messages = {
@@ -108,6 +109,37 @@ void main() {
           reason: 'HTTP 429 must remain readable without a JSON error body',
         );
       }
+
+      expect(
+        downloadFailureText(messageContext, 'SOURCE_ACCESS_CHECK_REQUIRED'),
+        locale.value['SOURCE_ACCESS_CHECK_REQUIRED'],
+      );
+      expect(
+        downloadFailureText(messageContext, 'source_audio_unavailable'),
+        locale.value['SOURCE_AUDIO_UNAVAILABLE'],
+      );
+      expect(
+        downloadFailureText(messageContext, 'SOURCE_RESPONSE_UNSUPPORTED'),
+        locale.value['SOURCE_RESPONSE_UNSUPPORTED'],
+      );
+      expect(
+        downloadFailureText(messageContext, null),
+        locale.key == 'vi'
+            ? 'Chưa trích xuất được MP3 (nguồn bị giới hạn hoặc mạng gián đoạn). Bạn vẫn có thể mở trên ứng dụng gốc hoặc thử lại.'
+            : 'Could not extract MP3 (source restricted or network interrupted). You can still open in the source app or retry.',
+      );
+      expect(
+        downloadFailureText(messageContext, 'AUDIO_CONVERSION_FAILED'),
+        locale.key == 'vi'
+            ? 'Không chuyển đổi được âm thanh sang MP3. Bạn có thể mở trên ứng dụng gốc hoặc chọn nguồn khác.'
+            : 'Could not convert the audio stream to MP3. You can open it in the original app or try another source.',
+      );
+      expect(isRetryableDownloadError('SOURCE_ACCESS_CHECK_REQUIRED'), isFalse);
+      expect(isRetryableDownloadError('SOURCE_AUDIO_UNAVAILABLE'), isFalse);
+      expect(isRetryableDownloadError('AUDIO_CONVERSION_FAILED'), isFalse);
+      expect(isRetryableDownloadError('RATE_LIMITED'), isTrue);
+      expect(isRetryableDownloadError('AUDIO_EXTRACTION_FAILED'), isTrue);
+      expect(isRetryableDownloadError('network_error'), isTrue);
     });
   }
 }

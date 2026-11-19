@@ -36,6 +36,8 @@ public static class AudioDownloadEndpoints
     {
         if (!r.RightsConfirmed)
             return ApiSupport.Problem("RIGHTS_CONFIRMATION_REQUIRED", 400, "Vui lòng xác nhận bạn có quyền hợp pháp để tải MP3 cá nhân.");
+        if (!AudioBitrate.IsValid(r.BitrateKbps))
+            return ApiSupport.Problem("INVALID_BITRATE", 400, "Bitrate MP3 chỉ hỗ trợ 128, 192 hoặc 320 kbps.");
         if (!extractor.IsAvailable)
             return ApiSupport.Problem("AUDIO_DOWNLOAD_UNAVAILABLE", 503, "Bộ xử lý tải MP3 (yt-dlp / FFmpeg) hiện chưa sẵn sàng.");
 
@@ -94,6 +96,7 @@ public static class AudioDownloadEndpoints
             Provider = entry.Song.Provider,
             CanonicalUrl = entry.Song.CanonicalUrl,
             RightsConfirmed = true,
+            BitrateKbps = r.BitrateKbps,
             Status = ImportStatus.Queued,
             ProgressPercent = 0,
             CreatedAt = now,
@@ -246,6 +249,9 @@ public static class AudioDownloadEndpoints
             .FirstOrDefaultAsync(x => x.Id == job.UserLibrarySongId && x.UserId == user, ct);
         if (song is null) return Results.NotFound();
 
+        if (job.Status == ImportStatus.Failed && !YtDlpAudioExtractor.IsRetryableErrorCode(job.ErrorCode))
+            return ApiSupport.Problem(job.ErrorCode ?? "DOWNLOAD_NOT_RETRYABLE", 422);
+
         if (job.Status is ImportStatus.Failed or ImportStatus.Canceled)
         {
             var now = clock.GetUtcNow();
@@ -310,6 +316,8 @@ public static class AudioDownloadEndpoints
         var title = song is null
             ? null
             : (!string.IsNullOrWhiteSpace(song.CustomTitle) ? song.CustomTitle : song.Song?.OriginalTitle);
+        var retryable = job.Status == ImportStatus.Canceled ||
+            (job.Status == ImportStatus.Failed && YtDlpAudioExtractor.IsRetryableErrorCode(job.ErrorCode));
         return new
         {
             job.Id,
@@ -321,6 +329,8 @@ public static class AudioDownloadEndpoints
             job.Status,
             job.ProgressPercent,
             job.ErrorCode,
+            retryable,
+            bitrateKbps = job.BitrateKbps,
             audioReady,
             audioStreamUrl = audioReady ? $"/api/v1/library/songs/{job.UserLibrarySongId}/audio" : null,
             outputSizeBytes = job.OutputSizeBytes ?? song?.AudioSizeBytes,
@@ -329,5 +339,5 @@ public static class AudioDownloadEndpoints
         };
     }
 
-    public sealed record EnqueueDownloadRequest(bool RightsConfirmed = false, bool ForceRedownload = false);
+    public sealed record EnqueueDownloadRequest(bool RightsConfirmed = false, bool ForceRedownload = false, int? BitrateKbps = null);
 }

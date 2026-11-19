@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/localization/app_copy.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/motion.dart';
+import '../../core/widgets/swipe_song_tile.dart';
 import '../../shared/models/library_models.dart';
 import '../library/library_repository.dart';
 import '../library/library_screen.dart';
@@ -75,10 +76,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final showAlbums = _filter == 'all' || _filter == 'albums';
     final showSongs = _filter == 'all' || _filter == 'songs';
 
-    return Scaffold(
-      appBar: AppBar(title: Text(context.tr('search'))),
-      bottomNavigationBar: const SafeArea(top: false, child: MiniPlayerDock()),
-      body: PageList(
+    return SwipeActionGroup(
+      child: Scaffold(
+        appBar: AppBar(title: Text(context.tr('search'))),
+        bottomNavigationBar: const SafeArea(
+          top: false,
+          child: MiniPlayerDock(),
+        ),
+        body: Builder(
+          builder: (bodyCtx) => NotificationListener<ScrollStartNotification>(
+            onNotification: (_) {
+              SwipeActionGroup.closeAll(bodyCtx);
+              return false;
+            },
+            child: PageList(
         children: [
           TextField(
             key: const Key('global-search-input'),
@@ -217,7 +228,50 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     vertical: 6,
                   ),
                   child: Column(
-                    children: r.songs.items.map(SongTile.new).toList(),
+                    children: r.songs.items
+                        .map(
+                          (song) => SongTile(
+                            song,
+                            onChanged: _search,
+                            onOptimisticFavorite: (updated) {
+                              if (!mounted) return;
+                              final next = r.songs.items
+                                  .map((s) => s.id == updated.id ? updated : s)
+                                  .toList();
+                              setState(
+                                () => _results = SearchResults(
+                                  albums: r.albums,
+                                  songs: PageResult(
+                                    next,
+                                    r.songs.total,
+                                    r.songs.page,
+                                    r.songs.pageSize,
+                                  ),
+                                ),
+                              );
+                            },
+                            onRollbackFavorite: (original) {
+                              if (!mounted) return;
+                              final next = r.songs.items
+                                  .map(
+                                    (s) => s.id == original.id ? original : s,
+                                  )
+                                  .toList();
+                              setState(
+                                () => _results = SearchResults(
+                                  albums: r.albums,
+                                  songs: PageResult(
+                                    next,
+                                    r.songs.total,
+                                    r.songs.page,
+                                    r.songs.pageSize,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                        .toList(),
                   ),
                 ),
               ),
@@ -225,6 +279,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ],
         ],
       ),
+      ),
+      ),
+    ),
     );
   }
 }
@@ -270,10 +327,20 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
       });
     });
     final scheme = Theme.of(context).colorScheme;
-    return Scaffold(
-      appBar: AppBar(title: Text(context.tr('favorites'))),
-      bottomNavigationBar: const SafeArea(top: false, child: MiniPlayerDock()),
-      body: RefreshIndicator(
+    return SwipeActionGroup(
+      child: Scaffold(
+        appBar: AppBar(title: Text(context.tr('favorites'))),
+        bottomNavigationBar: const SafeArea(
+          top: false,
+          child: MiniPlayerDock(),
+        ),
+        body: Builder(
+          builder: (bodyCtx) => NotificationListener<ScrollStartNotification>(
+            onNotification: (_) {
+              SwipeActionGroup.closeAll(bodyCtx);
+              return false;
+            },
+            child: RefreshIndicator(
         onRefresh: _refresh,
         child: FutureBuilder<(PageResult<Album>, PageResult<Song>)>(
           future: _favorites,
@@ -344,7 +411,9 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
                         vertical: 6,
                       ),
                       child: Column(
-                        children: songs.items.map(SongTile.new).toList(),
+                        children: songs.items
+                            .map((s) => SongTile(s, onChanged: _refresh))
+                            .toList(),
                       ),
                     ),
                   ),
@@ -354,6 +423,9 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
           },
         ),
       ),
+      ),
+      ),
+    ),
     );
   }
 }

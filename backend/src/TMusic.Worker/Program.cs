@@ -13,10 +13,15 @@ builder.Services.AddProviders(builder.Configuration);
 builder.Services.AddHostedService<ImportWorker>();
 await builder.Build().RunAsync();
 
-internal sealed class ImportWorker(IServiceScopeFactory scopeFactory, TimeProvider clock, ILogger<ImportWorker> logger) : BackgroundService
+internal sealed class ImportWorker(IServiceScopeFactory scopeFactory, TimeProvider clock, IConfiguration config, IAudioExtractor extractor, ILogger<ImportWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (config.GetValue("Features:EnableAudioDownloads", false))
+        {
+            if (extractor.IsAvailable) logger.LogInformation("Audio download tools validated at worker startup (yt-dlp and FFmpeg available).");
+            else logger.LogWarning("Audio downloads are enabled but required extraction binaries (yt-dlp / FFmpeg) were not found at worker startup.");
+        }
         var nextCleanup = clock.GetUtcNow();
         while (!stoppingToken.IsCancellationRequested)
         {

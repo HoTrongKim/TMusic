@@ -58,7 +58,8 @@ public sealed class AudioDownloadEgressProxy : IAsyncDisposable
                 Domain(host, "tiktokv.com") || Domain(host, "tiktokcdn.com") ||
                 Domain(host, "tiktokcdn-us.com") || Domain(host, "tiktokcdn-eu.com"),
             "soundcloud" => host is "soundcloud.com" or "www.soundcloud.com" or "m.soundcloud.com" or
-                "on.soundcloud.com" or "api.soundcloud.com" or "api-v2.soundcloud.com" || Domain(host, "sndcdn.com"),
+                "on.soundcloud.com" or "api.soundcloud.com" or "api-v2.soundcloud.com" ||
+                Domain(host, "sndcdn.com") || Domain(host, "soundcloud.cloud"),
             _ => false
         };
     }

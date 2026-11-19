@@ -5,13 +5,72 @@ import 'package:go_router/go_router.dart';
 import '../../core/auth/external_auth.dart';
 import '../../core/auth/session.dart';
 import '../../core/localization/app_copy.dart';
+import '../../core/storage/app_metadata.dart';
 import '../../core/storage/library_cache.dart';
 import '../../core/widgets/common.dart';
+import '../library/library_repository.dart';
+import '../playback/local_audio.dart';
 import '../settings/settings_controller.dart';
+
+class ProfileLibraryStats {
+  const ProfileLibraryStats({
+    this.totalSongs,
+    this.totalAlbums,
+    this.favoriteSongs,
+    required this.downloadedAudioBytes,
+    required this.cacheBytes,
+  });
+
+  final int? totalSongs;
+  final int? totalAlbums;
+  final int? favoriteSongs;
+  final int downloadedAudioBytes;
+  final int cacheBytes;
+}
 
 final profileProvider = FutureProvider((ref) async {
   if (ref.watch(sessionProvider).value == null) return <String, dynamic>{};
   return ref.read(authorizedApiProvider).request('GET', '/users/me');
+}, retry: (_, _) => null);
+
+final profileLibraryStatsProvider = FutureProvider<ProfileLibraryStats>((
+  ref,
+) async {
+  ref.watch(sessionProvider.select((s) => s.value?.userId));
+  ref.watch(libraryRevisionProvider);
+  final repo = ref.watch(libraryRepositoryProvider);
+  final cache = ref.watch(libraryCacheProvider);
+
+  int? totalSongs;
+  int? totalAlbums;
+  int? favoriteSongs;
+  try {
+    final songsPage = await repo.songs(page: 1);
+    final albumsPage = await repo.albums(page: 1);
+    final favPage = await repo.songs(page: 1, favorite: true);
+    totalSongs = songsPage.total;
+    totalAlbums = albumsPage.total;
+    favoriteSongs = favPage.total;
+  } catch (_) {}
+
+  var audioBytes = 0;
+  try {
+    final local = await ref.read(localLibraryProvider.future);
+    audioBytes = await local.storageUsageBytes();
+  } catch (_) {}
+
+  var cacheBytes = 0;
+  try {
+    cacheBytes = await cache.cacheSizeBytes();
+  } catch (_) {}
+
+  return ProfileLibraryStats(
+    totalSongs: totalSongs,
+    totalAlbums: totalAlbums,
+    favoriteSongs: favoriteSongs,
+    downloadedAudioBytes: audioBytes,
+    cacheBytes: cacheBytes,
+  );
 }, retry: (_, _) => null);
 
 /// Matchy & Cross-inspired Studio Profile Screen with Multi-Color Tinted Menu Badges.
@@ -108,6 +167,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   Widget build(BuildContext context) {
     final isGuest = ref.watch(sessionProvider).value == null;
     final profile = isGuest ? null : ref.watch(profileProvider);
+    final statsAsync = ref.watch(profileLibraryStatsProvider);
+    final stats = statsAsync.hasValue ? statsAsync.value : null;
+    final appVersionAsync = ref.watch(appVersionProvider);
+    final appVersion = appVersionAsync.hasValue ? appVersionAsync.value : null;
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -214,8 +277,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
               loading: () => const LinearProgressIndicator(),
             ),
-          const SizedBox(height: 16),
-          // Grouped Library & Preferences Card (Matchy multi-color badge style)
+          const SizedBox(height: 12),
+          // Grouped Library & Preferences Card
           Material(
             color: scheme.surface,
             shape: RoundedRectangleBorder(
@@ -258,6 +321,29 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 ),
               ],
             ),
+          ),
+          if (stats != null &&
+              (stats.totalSongs != null ||
+                  stats.totalAlbums != null ||
+                  stats.favoriteSongs != null)) ...[
+            const SizedBox(height: 14),
+            _ProfileStatsCard(stats: stats),
+          ],
+          const SizedBox(height: 14),
+          _ProfileStorageCard(
+            audioBytes: stats?.downloadedAudioBytes ?? 0,
+            cacheBytes: stats?.cacheBytes ?? 0,
+            busy: _busy,
+            onManageAudio: () => context.push('/local'),
+            onClearCache: () async {
+              await ref.read(libraryCacheProvider).clearAll();
+              ref.invalidate(profileLibraryStatsProvider);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(context.tr('cacheCleared'))),
+                );
+              }
+            },
           ),
           const SizedBox(height: 14),
           // Grouped Account & Security Card
@@ -314,7 +400,244 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               label: Text(context.tr('logout')),
             ),
           ],
+          const SizedBox(height: 26),
+          Column(
+            children: [
+              Text(
+                context.tr('authorCredit'),
+                key: const Key('profile-author-credit'),
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontSize: 12,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              if (appVersion != null && appVersion.displayLabel.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  'TMusic ${appVersion.displayLabel}',
+                  key: const Key('profile-app-version'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontSize: 11.5,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.78),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
         ],
+      ),
+    );
+  }
+}
+
+class _ProfileStatsCard extends StatelessWidget {
+  const _ProfileStatsCard({required this.stats});
+  final ProfileLibraryStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final items = <(String, String)>[
+      if (stats.totalSongs != null) (context.tr('songs'), '${stats.totalSongs}'),
+      if (stats.totalAlbums != null)
+        (context.tr('albums'), '${stats.totalAlbums}'),
+      if (stats.favoriteSongs != null)
+        (context.tr('favorites'), '${stats.favoriteSongs}'),
+      (
+        context.tr('downloadedAudioSize'),
+        formatStorageBytes(stats.downloadedAudioBytes),
+      ),
+    ];
+
+    return Material(
+      key: const Key('profile-library-stats'),
+      color: scheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final textScale = MediaQuery.textScalerOf(context).scale(1);
+            final compactRow = constraints.maxWidth >= 300 && textScale <= 1.3;
+            if (compactRow) {
+              return Row(
+                children: [
+                  for (final (label, value) in items)
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              value,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            }
+            final columns = constraints.maxWidth >= 280 && textScale <= 1.6
+                ? 2
+                : 1;
+            final width = (constraints.maxWidth - (columns - 1) * 8) / columns;
+            return Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final (label, value) in items)
+                  SizedBox(
+                    width: width,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            value,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileStorageCard extends StatelessWidget {
+  const _ProfileStorageCard({
+    required this.audioBytes,
+    required this.cacheBytes,
+    required this.busy,
+    required this.onManageAudio,
+    required this.onClearCache,
+  });
+
+  final int audioBytes;
+  final int cacheBytes;
+  final bool busy;
+  final VoidCallback onManageAudio;
+  final VoidCallback onClearCache;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      key: const Key('profile-storage-card'),
+      color: scheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              context.tr('storageUsage'),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    context.tr('downloadedAudioSize'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+                Text(
+                  formatStorageBytes(audioBytes),
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    context.tr('cacheSize'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+                Text(
+                  formatStorageBytes(cacheBytes),
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onManageAudio,
+                  icon: const Icon(Icons.folder_open_rounded, size: 18),
+                  label: Text(context.tr('manageDownloadedAudio')),
+                ),
+                TextButton.icon(
+                  onPressed: busy ? null : onClearCache,
+                  icon: const Icon(Icons.cleaning_services_outlined, size: 18),
+                  label: Text(context.tr('clearCache')),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -12,12 +12,14 @@ import '../../core/api/api_client.dart';
 import '../../core/localization/app_copy.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/motion.dart';
+import '../../core/widgets/swipe_song_tile.dart';
 import '../../shared/models/library_models.dart';
 import '../library/library_repository.dart';
 import '../library/library_screen.dart';
 import '../playback/local_audio.dart';
 import '../playback/local_audio_screen.dart';
 import '../share/shared_links.dart';
+import '../songs/song_actions.dart';
 import 'album_share_sheets.dart';
 
 /// Create & Edit Album Screen (with Custom Cover Upload & Studio Palette)
@@ -306,11 +308,78 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   Album? _album;
   List<Song> _songs = [];
   Set<String> _localSongIds = {};
+  final Set<String> _selectedSongIds = {};
   LocalAudio? _player;
   Object? _error;
   bool _busy = true, _more = false;
   int _page = 1;
   int _loadRequest = 0;
+
+  bool get _selecting => _selectedSongIds.isNotEmpty;
+
+  void _replaceSongInList(Song updated) {
+    final idx = _songs.indexWhere((s) => s.id == updated.id);
+    if (idx >= 0 && mounted) {
+      setState(() {
+        final copy = [..._songs];
+        copy[idx] = updated;
+        _songs = copy;
+      });
+    }
+  }
+
+  void _toggleSelectSong(String id) {
+    TMusicHaptics.selection();
+    setState(() {
+      if (!_selectedSongIds.remove(id)) _selectedSongIds.add(id);
+    });
+  }
+
+  List<Song> get _selectedSongs =>
+      _songs.where((s) => _selectedSongIds.contains(s.id)).toList();
+
+  Future<void> _batchRemoveFromAlbum(Album album) async {
+    final targets = _selectedSongs;
+    if (targets.isEmpty) return;
+    final confirmed = await confirmAction(
+      context,
+      context.tr('swipeRemoveFromAlbum'),
+      context
+          .tr('batchRemoveAlbumConfirmBody')
+          .replaceAll('{count}', '${targets.length}'),
+    );
+    if (!confirmed || !mounted) return;
+    await _mutate(() async {
+      final repo = ref.read(libraryRepositoryProvider);
+      for (final song in targets) {
+        final fresh = await repo.album(album.id);
+        await repo.removeFromAlbum(fresh, song);
+      }
+      _selectedSongIds.clear();
+    });
+  }
+
+  Future<void> _batchAddToOtherAlbums() async {
+    final targets = _selectedSongs;
+    if (targets.isEmpty) return;
+    final changed = await SongActions.openAlbumPicker(context, songs: targets);
+    if (changed == true && mounted) {
+      setState(() => _selectedSongIds.clear());
+      await _load();
+    }
+  }
+
+  Future<void> _batchFavoriteSongs() async {
+    final targets = _selectedSongs;
+    if (targets.isEmpty) return;
+    await _mutate(() async {
+      final repo = ref.read(libraryRepositoryProvider);
+      for (final song in targets) {
+        if (!song.favorite) await repo.favorite(song);
+      }
+      _selectedSongIds.clear();
+    });
+  }
 
   Future<void> _playAlbumMp3(
     Album a, {
@@ -475,49 +544,96 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
       isDark: scheme.brightness == Brightness.dark,
     );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(a?.name ?? context.tr('albums')),
-        actions: [
-          if (a != null) ...[
-            IconButton(
-              tooltip: context.tr('editAlbum'),
-              onPressed: () => context.push('/albums/${a.id}/edit'),
-              icon: const Icon(Icons.edit_outlined),
+    return SwipeActionGroup(
+      child: Scaffold(
+      appBar: _selecting && a != null
+          ? AppBar(
+              leading: IconButton(
+                tooltip: context.tr('cancel'),
+                onPressed: () => setState(() => _selectedSongIds.clear()),
+                icon: const Icon(Icons.close_rounded),
+              ),
+              title: Text(
+                context
+                    .tr('multiSelectCount')
+                    .replaceAll('{count}', '${_selectedSongIds.length}'),
+              ),
+              actions: [
+                IconButton(
+                  tooltip: context.tr('favoriteAdd'),
+                  onPressed: _busy ? null : _batchFavoriteSongs,
+                  icon: const Icon(Icons.favorite_outline_rounded),
+                ),
+                IconButton(
+                  tooltip: context.tr('addToAlbum'),
+                  onPressed: _busy ? null : _batchAddToOtherAlbums,
+                  icon: const Icon(Icons.playlist_add_rounded),
+                ),
+                IconButton(
+                  tooltip: context.tr('swipeRemoveFromAlbum'),
+                  onPressed: _busy ? null : () => _batchRemoveFromAlbum(a),
+                  icon: Icon(
+                    Icons.remove_circle_outline_rounded,
+                    color: scheme.error,
+                  ),
+                ),
+              ],
+            )
+          : AppBar(
+              title: Text(a?.name ?? context.tr('albums')),
+              actions: [
+                if (a != null) ...[
+                  IconButton(
+                    tooltip: context.tr('editAlbum'),
+                    onPressed: () => context.push('/albums/${a.id}/edit'),
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                  IconButton(
+                    tooltip: context.tr('delete'),
+                    onPressed: _busy
+                        ? null
+                        : () async {
+                            final body = a.songCount > 0
+                                ? context
+                                      .tr('albumDeleteImpact')
+                                      .replaceAll('{count}', '${a.songCount}')
+                                : context.tr('albumDeleteBody');
+                            if (!await confirmAction(
+                              context,
+                              context.tr('albumDeleteTitle'),
+                              body,
+                            )) {
+                              return;
+                            }
+                            try {
+                              await ref
+                                  .read(libraryRepositoryProvider)
+                                  .deleteAlbum(a);
+                              ref
+                                  .read(libraryRevisionProvider.notifier)
+                                  .changed();
+                              if (context.mounted) context.pop();
+                            } catch (e) {
+                              if (mounted) setState(() => _error = e);
+                            }
+                          },
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+                ],
+              ],
             ),
-            IconButton(
-              tooltip: context.tr('delete'),
-              onPressed: _busy
-                  ? null
-                  : () async {
-                      if (!await confirmAction(
-                        context,
-                        context.tr('albumDeleteTitle'),
-                        context.tr('albumDeleteBody'),
-                      )) {
-                        return;
-                      }
-                      try {
-                        await ref
-                            .read(libraryRepositoryProvider)
-                            .deleteAlbum(a);
-                        ref.read(libraryRevisionProvider.notifier).changed();
-                        if (context.mounted) context.pop();
-                      } catch (e) {
-                        if (mounted) setState(() => _error = e);
-                      }
-                    },
-              icon: const Icon(Icons.delete_outline_rounded),
-            ),
-          ],
-        ],
-      ),
       bottomNavigationBar: inlinePlayer == null
           ? const SafeArea(top: false, child: MiniPlayerDock())
           : null,
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: CustomScrollView(
+      body: Builder(
+        builder: (bodyCtx) => NotificationListener<ScrollStartNotification>(
+          onNotification: (_) {
+            SwipeActionGroup.closeAll(bodyCtx);
+            return false;
+          },
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: CustomScrollView(
           slivers: [
             SliverToBoxAdapter(
               child: DecoratedBox(
@@ -734,6 +850,14 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
                               song,
                               trackNumber: index + 1,
                               isDownloaded: _localSongIds.contains(song.id),
+                              albumContext: a,
+                              selectable: _selecting,
+                              selected: _selectedSongIds.contains(song.id),
+                              onToggleSelect: () => _toggleSelectSong(song.id),
+                              onLongPress: () => _toggleSelectSong(song.id),
+                              onOptimisticFavorite: _replaceSongInList,
+                              onRollbackFavorite: _replaceSongInList,
+                              onChanged: _load,
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
@@ -754,13 +878,27 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
                                       ),
                                     ),
                                   PopupMenuButton<String>(
-                                    tooltip: context.tr('editSong'),
+                                    tooltip: context.tr('moreActions'),
                                     onSelected: (value) {
-                                      if (value == 'remove') {
-                                        _mutate(
-                                          () => ref
-                                              .read(libraryRepositoryProvider)
-                                              .removeFromAlbum(a!, song),
+                                      if (value == 'remove' && a != null) {
+                                        SongActions.removeFromAlbumWithUndo(
+                                          context,
+                                          ref,
+                                          a,
+                                          song,
+                                          onChanged: _load,
+                                        );
+                                      } else if (value == 'more') {
+                                        SongActions.showMoreSheet(
+                                          context,
+                                          ref,
+                                          song,
+                                          albumContext: a,
+                                          canPlay: _canPlay(song),
+                                          onChanged: _load,
+                                          onOptimisticFavorite:
+                                              _replaceSongInList,
+                                          onRollbackFavorite: _replaceSongInList,
                                         );
                                       } else {
                                         _move(index, value == 'up' ? -1 : 1);
@@ -768,8 +906,14 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
                                     },
                                     itemBuilder: (context) => [
                                       PopupMenuItem(
+                                        value: 'more',
+                                        child: Text(context.tr('moreActions')),
+                                      ),
+                                      PopupMenuItem(
                                         value: 'remove',
-                                        child: Text(context.tr('removeAlbum')),
+                                        child: Text(
+                                          context.tr('swipeRemoveFromAlbum'),
+                                        ),
                                       ),
                                       if (!_more && index > 0)
                                         PopupMenuItem(
@@ -806,6 +950,9 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
           ],
         ),
       ),
+      ),
+      ),
+    ),
     );
   }
 }

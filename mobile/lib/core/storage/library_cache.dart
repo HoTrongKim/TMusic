@@ -117,6 +117,37 @@ class LibraryCache {
     return val is String && val.isNotEmpty ? val : null;
   }
 
+  Future<void> writeSongSort(String sort) async {
+    await writeSnapshot('pref:song_sort', {'sort': sort});
+  }
+
+  Future<String?> readSongSort() async {
+    final snap = await readSnapshot('pref:song_sort');
+    final val = snap?['sort'];
+    return val is String && val.isNotEmpty ? val : null;
+  }
+
+  Future<int> cacheSizeBytes() async {
+    if (!enableInFlutterTest &&
+        Platform.environment.containsKey('FLUTTER_TEST')) {
+      return 0;
+    }
+    final owner = userId;
+    if (owner == null || owner.isEmpty) return 0;
+    try {
+      final root = await getApplicationSupportDirectory();
+      final safe = owner.replaceAll(RegExp('[^a-zA-Z0-9_-]'), '');
+      var total = 0;
+      for (final suffix in ['', '-wal', '-shm']) {
+        final file = File('${root.path}/cache/library_$safe.db$suffix');
+        if (await file.exists()) total += await file.length();
+      }
+      return total;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<Map<String, dynamic>?> findCachedSong(String songId) async {
     final direct = await readSnapshot('song:$songId');
     if (direct != null) return direct;

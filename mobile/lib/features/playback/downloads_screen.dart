@@ -313,7 +313,7 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                   'COMPLETE' => context.tr('mp3ReadyBadge'),
                   'RUNNING' || 'QUEUED' =>
                     '${context.tr('downloadingMp3')} (${job.progressPercent}%)',
-                  'FAILED' => context.tr('mp3Failed'),
+                  'FAILED' => downloadFailureText(context, job.errorCode),
                   _ => job.status,
                 };
                 final statusColor = switch (job.status) {
@@ -455,8 +455,7 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                             const SizedBox(height: 10),
                             SmoothProgressBar(percent: job.progressPercent),
                           ],
-                          if (job.status == 'FAILED' ||
-                              job.status == 'CANCELED') ...[
+                          if (job.isRetryable) ...[
                             const SizedBox(height: 10),
                             OutlinedButton.icon(
                               onPressed: _acting ? null : () => _retryJob(job),

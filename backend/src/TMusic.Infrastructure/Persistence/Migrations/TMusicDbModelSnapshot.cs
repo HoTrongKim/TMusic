@@ -303,6 +303,9 @@ namespace TMusic.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("BitrateKbps")
+                        .HasColumnType("int");
+
                     b.Property<string>("CanonicalUrl")
                         .IsRequired()
                         .HasMaxLength(512)

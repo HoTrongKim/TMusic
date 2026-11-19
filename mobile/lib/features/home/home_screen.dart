@@ -7,6 +7,7 @@ import '../../core/auth/session.dart';
 import '../../core/localization/app_copy.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/motion.dart';
+import '../../core/widgets/swipe_song_tile.dart';
 import '../../shared/models/library_models.dart';
 import '../albums/album_share_sheets.dart';
 import '../library/library_repository.dart';
@@ -156,8 +157,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final canChangeTheme =
         settings.hasValue && !settings.isLoading && !settings.hasError;
 
-    return Scaffold(
-      body: DecoratedBox(
+    return SwipeActionGroup(
+      child: Scaffold(
+      body: Builder(
+        builder: (bodyCtx) => NotificationListener<ScrollStartNotification>(
+          onNotification: (_) {
+            SwipeActionGroup.closeAll(bodyCtx);
+            return false;
+          },
+          child: DecoratedBox(
         decoration: BoxDecoration(
           gradient: RadialGradient(
             center: const Alignment(-0.85, -1.0),
@@ -407,6 +415,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         ...data.recentSongs.map(
                           (s) => SongTile(
                             s,
+                            onChanged: _refresh,
                             trailing: s.audioReady
                                 ? IconButton(
                                     tooltip: context.tr('playMp3'),
@@ -429,7 +438,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: 8),
-                        ...data.unorganizedSongs.map(SongTile.new),
+                        ...data.unorganizedSongs.map(
+                          (s) => SongTile(s, onChanged: _refresh),
+                        ),
                       ],
                     ],
                   );
@@ -439,6 +450,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ),
       ),
+      ),
+      ),
+    ),
     );
   }
 }

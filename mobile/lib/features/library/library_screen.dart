@@ -8,13 +8,18 @@ import 'package:go_router/go_router.dart';
 import '../../app/theme/tmusic_theme.dart';
 import '../../core/auth/session.dart';
 import '../../core/localization/app_copy.dart';
+import '../../core/storage/library_cache.dart';
 import '../../core/widgets/common.dart';
+import '../../core/widgets/motion.dart';
+import '../../core/widgets/swipe_song_tile.dart';
 import '../../shared/models/library_models.dart';
 import '../albums/album_share_sheets.dart';
 import '../playback/local_audio.dart';
+import '../songs/song_actions.dart';
 import 'library_repository.dart';
 
-/// Cross & MusicRoom-inspired Compact Track Row with Live Equalizer Highlight.
+/// Compact Track Row with Live Equalizer Highlight, Left-Swipe Actions,
+/// Accessible Three-Dot Menu, and Multi-Selection Support.
 class SongTile extends ConsumerWidget {
   const SongTile(
     this.song, {
@@ -23,6 +28,15 @@ class SongTile extends ConsumerWidget {
     this.trackNumber,
     this.onPlayTap,
     this.isDownloaded = false,
+    this.enableSwipe = true,
+    this.albumContext,
+    this.onChanged,
+    this.onOptimisticFavorite,
+    this.onRollbackFavorite,
+    this.selectable = false,
+    this.selected = false,
+    this.onToggleSelect,
+    this.onLongPress,
   });
 
   final Song song;
@@ -30,6 +44,15 @@ class SongTile extends ConsumerWidget {
   final int? trackNumber;
   final VoidCallback? onPlayTap;
   final bool isDownloaded;
+  final bool enableSwipe;
+  final Album? albumContext;
+  final VoidCallback? onChanged;
+  final void Function(Song updated)? onOptimisticFavorite;
+  final void Function(Song original)? onRollbackFavorite;
+  final bool selectable;
+  final bool selected;
+  final VoidCallback? onToggleSelect;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -41,19 +64,33 @@ class SongTile extends ConsumerWidget {
     final player = audioAsync.hasValue ? audioAsync.value : null;
 
     Widget buildRow(bool isCurrent) {
-      return Material(
-        color: isCurrent
+      final canPlay = isDownloaded || (!song.isGuestLocal && song.audioReady);
+      final rowContent = Material(
+        color: selected
+            ? scheme.primary.withValues(alpha: 0.16)
+            : isCurrent
             ? scheme.primary.withValues(alpha: 0.11)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: onPlayTap ?? () => context.push('/songs/${song.id}'),
+          onTap: selectable
+              ? onToggleSelect
+              : (onPlayTap ?? () => context.push('/songs/${song.id}')),
+          onLongPress: onLongPress,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
             child: Row(
               children: [
-                if (trackNumber != null)
+                if (selectable)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Checkbox(
+                      value: selected,
+                      onChanged: (_) => onToggleSelect?.call(),
+                    ),
+                  )
+                else if (trackNumber != null)
                   SizedBox(
                     width: 28,
                     child: isCurrent
@@ -72,7 +109,7 @@ class SongTile extends ConsumerWidget {
                   alignment: Alignment.center,
                   children: [
                     Cover(url: song.thumbnail, size: 50, radius: 6),
-                    if (isCurrent && trackNumber == null)
+                    if (isCurrent && trackNumber == null && !selectable)
                       Container(
                         width: 50,
                         height: 50,
@@ -121,7 +158,7 @@ class SongTile extends ConsumerWidget {
                 const SizedBox(width: 4),
                 if (song.audioReady || isDownloaded)
                   Padding(
-                    padding: const EdgeInsets.only(right: 4),
+                    padding: const EdgeInsets.only(right: 2),
                     child: Icon(
                       Icons.arrow_circle_down_rounded,
                       semanticLabel: context.tr('downloadedFilter'),
@@ -129,20 +166,111 @@ class SongTile extends ConsumerWidget {
                       size: 18,
                     ),
                   ),
-                trailing ??
-                    Icon(
-                      song.favorite
-                          ? Icons.favorite_rounded
-                          : Icons.chevron_right_rounded,
-                      size: 20,
-                      color: song.favorite
-                          ? const Color(0xFFE05263)
-                          : scheme.onSurfaceVariant,
+                if (song.favorite && !selectable && trailing == null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 2),
+                    child: Icon(
+                      Icons.favorite_rounded,
+                      size: 16,
+                      semanticLabel: context.tr('favorites'),
+                      color: const Color(0xFFE05263),
                     ),
+                  ),
+                if (!selectable)
+                  trailing ??
+                      IconButton(
+                        key: Key('song-more-${song.id}'),
+                        visualDensity: VisualDensity.compact,
+                        tooltip: context.tr('moreActions'),
+                        onPressed: () {
+                          SwipeActionGroup.closeAll(context);
+                          SongActions.showMoreSheet(
+                            context,
+                            ref,
+                            song,
+                            albumContext: albumContext,
+                            canPlay: canPlay,
+                            onChanged: onChanged,
+                            onOptimisticFavorite: onOptimisticFavorite,
+                            onRollbackFavorite: onRollbackFavorite,
+                          );
+                        },
+                        icon: Icon(
+                          Icons.more_vert_rounded,
+                          size: 20,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
               ],
             ),
           ),
         ),
+      );
+
+      if (!enableSwipe || selectable) return rowContent;
+
+      return SwipeActionRow(
+        itemId: 'song-${song.id}-${albumContext?.id ?? "lib"}',
+        actions: [
+          SwipeActionItem(
+            key: Key('swipe-fav-${song.id}'),
+            icon: song.favorite
+                ? Icons.favorite_rounded
+                : Icons.favorite_border_rounded,
+            label: context.tr('swipeFavorite'),
+            backgroundColor: const Color(0xFFD94B5C),
+            onPressed: () => SongActions.toggleFavorite(
+              context,
+              ref,
+              song,
+              onOptimistic: onOptimisticFavorite,
+              onRollback: onRollbackFavorite,
+            ),
+          ),
+          SwipeActionItem(
+            key: Key('swipe-album-${song.id}'),
+            icon: Icons.playlist_add_rounded,
+            label: context.tr('swipeAddAlbum'),
+            backgroundColor: TMusicTheme.spotifyGreen,
+            foregroundColor: Colors.black,
+            onPressed: () async {
+              final changed = await SongActions.openAlbumPicker(
+                context,
+                songs: [song],
+              );
+              if (changed == true) onChanged?.call();
+            },
+          ),
+          SwipeActionItem(
+            key: Key('swipe-delete-${song.id}'),
+            icon: albumContext != null
+                ? Icons.remove_circle_outline_rounded
+                : Icons.delete_outline_rounded,
+            label: context.tr('delete'),
+            backgroundColor: scheme.error,
+            foregroundColor: scheme.onError,
+            onPressed: () {
+              if (albumContext != null) {
+                SongActions.removeFromAlbumWithUndo(
+                  context,
+                  ref,
+                  albumContext!,
+                  song,
+                  onChanged: onChanged,
+                );
+              } else {
+                SongActions.confirmAndDeleteFromLibrary(
+                  context,
+                  ref,
+                  song,
+                  hasLocalMp3: isDownloaded || song.audioReady,
+                  onDeleted: onChanged,
+                );
+              }
+            },
+          ),
+        ],
+        child: rowContent,
       );
     }
 
@@ -273,16 +401,37 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   List<Album> _albumItems = [];
   List<Song> _songItems = [];
   Set<String> _downloadedTrackIds = {};
+  final Set<String> _selectedSongIds = {};
   int _request = 0;
 
   bool get _albums => _section == 'albums' && _provider == null;
   bool get _unorganizedOnly => _section == 'unclassified';
   bool get _downloadedOnly => _section == 'downloaded';
+  bool get _selecting => !_albums && _selectedSongIds.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _restoreSortAndLoad();
+  }
+
+  Future<void> _restoreSortAndLoad() async {
+    try {
+      final savedSort = await ref.read(libraryCacheProvider).readSongSort();
+      if (mounted &&
+          savedSort != null &&
+          const [
+            'recent',
+            'oldest',
+            'name',
+            'name_desc',
+            'artist',
+            'duration',
+          ].contains(savedSort)) {
+        _sort = savedSort;
+      }
+    } catch (_) {}
+    if (mounted) await _load();
   }
 
   @override
@@ -377,13 +526,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
   String _sortLabel(String sort) => switch (sort) {
     'order' => 'sortOrder',
+    'oldest' => 'sortOldest',
     'name' => 'sortName',
+    'name_desc' => 'sortNameDesc',
+    'artist' => 'sortArtist',
+    'duration' => 'sortDuration',
     _ => 'sortRecent',
   };
 
   void _selectFilter({String? section, String? provider}) {
     _debounce?.cancel();
     setState(() {
+      _selectedSongIds.clear();
       if (section != null) {
         _section = section;
         if (section == 'albums') _provider = null;
@@ -394,9 +548,146 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       if (!_albums) {
         _reordering = false;
         if (_sort == 'order') _sort = 'recent';
+      } else if (!const ['recent', 'name', 'order'].contains(_sort)) {
+        _sort = 'recent';
       }
     });
     _load();
+  }
+
+  void _replaceSongInList(Song updated) {
+    final idx = _songItems.indexWhere((s) => s.id == updated.id);
+    if (idx >= 0 && mounted) {
+      setState(() {
+        final copy = [..._songItems];
+        copy[idx] = updated;
+        _songItems = copy;
+      });
+    }
+  }
+
+  void _toggleSelectSong(String id) {
+    TMusicHaptics.selection();
+    setState(() {
+      if (!_selectedSongIds.remove(id)) _selectedSongIds.add(id);
+    });
+  }
+
+  List<Song> get _selectedSongs =>
+      _songItems.where((s) => _selectedSongIds.contains(s.id)).toList();
+
+  Future<void> _batchFavorite() async {
+    final targets = _selectedSongs;
+    if (targets.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final repo = ref.read(libraryRepositoryProvider);
+      for (final song in targets) {
+        if (!song.favorite) await repo.favorite(song);
+      }
+      ref.read(libraryRevisionProvider.notifier).changed();
+      TMusicHaptics.medium();
+      if (mounted) {
+        setState(() => _selectedSongIds.clear());
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context
+                  .tr('batchDoneNotice')
+                  .replaceAll('{count}', '${targets.length}'),
+            ),
+          ),
+        );
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) setState(() => _error = e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _batchAddToAlbum() async {
+    final targets = _selectedSongs;
+    if (targets.isEmpty) return;
+    final changed = await SongActions.openAlbumPicker(context, songs: targets);
+    if (changed == true && mounted) {
+      setState(() => _selectedSongIds.clear());
+      await _load();
+    }
+  }
+
+  Future<void> _batchEnqueue() async {
+    final targets = _selectedSongs
+        .where(
+          (s) =>
+              _downloadedTrackIds.contains('song:${s.id}') ||
+              (!s.isGuestLocal && s.audioReady),
+        )
+        .toList();
+    if (targets.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.tr('emptyDownloaded'))),
+        );
+      }
+      return;
+    }
+    for (final song in targets) {
+      if (!mounted) return;
+      await SongActions.enqueueSong(context, ref, song, playNext: false);
+    }
+    if (mounted) setState(() => _selectedSongIds.clear());
+  }
+
+  Future<void> _batchDelete() async {
+    final targets = _selectedSongs;
+    if (targets.isEmpty) return;
+    final confirmed = await confirmAction(
+      context,
+      context.tr('songDeleteTitle'),
+      context
+          .tr('batchDeleteConfirmBody')
+          .replaceAll('{count}', '${targets.length}'),
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final repo = ref.read(libraryRepositoryProvider);
+      final audioAsync = ref.read(localAudioProvider);
+      LocalLibrary? local;
+      try {
+        local = await ref.read(localLibraryProvider.future);
+      } catch (_) {}
+      for (final song in targets) {
+        if (audioAsync.hasValue && audioAsync.value != null) {
+          await audioAsync.value!.removeSongFromQueue(song.id);
+        }
+        await repo.deleteSong(song);
+        try {
+          await local?.removeSongTrack(song.id);
+        } catch (_) {}
+      }
+      ref.read(libraryRevisionProvider.notifier).changed();
+      TMusicHaptics.medium();
+      if (mounted) {
+        setState(() => _selectedSongIds.clear());
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              context
+                  .tr('batchDoneNotice')
+                  .replaceAll('{count}', '${targets.length}'),
+            ),
+          ),
+        );
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) setState(() => _error = e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _importSharedAlbum() async {
@@ -440,56 +731,102 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         MediaQuery.sizeOf(context).width >= 350 &&
         textScale <= 1.35;
 
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          tooltip: context.tr('profile'),
-          onPressed: () => context.go('/profile'),
-          icon: CircleAvatar(
-            radius: 16,
-            backgroundColor: scheme.primaryContainer,
-            foregroundColor: scheme.onPrimaryContainer,
-            child: const Icon(Icons.person_rounded, size: 19),
-          ),
-        ),
-        titleSpacing: 0,
-        title: Text(
-          context.tr('library'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          IconButton(
-            tooltip: context.tr(_showSearch ? 'cancel' : 'search'),
-            onPressed: () {
-              setState(() => _showSearch = !_showSearch);
-              if (!_showSearch && _query.text.isNotEmpty) {
-                _debounce?.cancel();
-                _query.clear();
-                _load();
-              }
-            },
-            icon: Icon(
-              _showSearch ? Icons.close_rounded : Icons.search_rounded,
+    return SwipeActionGroup(
+      child: Scaffold(
+      appBar: _selecting
+          ? AppBar(
+              leading: IconButton(
+                tooltip: context.tr('cancel'),
+                onPressed: () => setState(() => _selectedSongIds.clear()),
+                icon: const Icon(Icons.close_rounded),
+              ),
+              title: Text(
+                context
+                    .tr('multiSelectCount')
+                    .replaceAll('{count}', '${_selectedSongIds.length}'),
+              ),
+              actions: [
+                IconButton(
+                  key: const Key('batch-favorite'),
+                  tooltip: context.tr('favoriteAdd'),
+                  onPressed: _busy ? null : _batchFavorite,
+                  icon: const Icon(Icons.favorite_outline_rounded),
+                ),
+                IconButton(
+                  key: const Key('batch-add-album'),
+                  tooltip: context.tr('addToAlbum'),
+                  onPressed: _busy ? null : _batchAddToAlbum,
+                  icon: const Icon(Icons.playlist_add_rounded),
+                ),
+                IconButton(
+                  key: const Key('batch-enqueue'),
+                  tooltip: context.tr('addToQueue'),
+                  onPressed: _busy ? null : _batchEnqueue,
+                  icon: const Icon(Icons.queue_music_rounded),
+                ),
+                IconButton(
+                  key: const Key('batch-delete'),
+                  tooltip: context.tr('delete'),
+                  onPressed: _busy ? null : _batchDelete,
+                  icon: Icon(Icons.delete_outline_rounded, color: scheme.error),
+                ),
+              ],
+            )
+          : AppBar(
+              leading: IconButton(
+                tooltip: context.tr('profile'),
+                onPressed: () => context.go('/profile'),
+                icon: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: scheme.primaryContainer,
+                  foregroundColor: scheme.onPrimaryContainer,
+                  child: const Icon(Icons.person_rounded, size: 19),
+                ),
+              ),
+              titleSpacing: 0,
+              title: Text(
+                context.tr('library'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              actions: [
+                IconButton(
+                  tooltip: context.tr(_showSearch ? 'cancel' : 'search'),
+                  onPressed: () {
+                    setState(() => _showSearch = !_showSearch);
+                    if (!_showSearch && _query.text.isNotEmpty) {
+                      _debounce?.cancel();
+                      _query.clear();
+                      _load();
+                    }
+                  },
+                  icon: Icon(
+                    _showSearch ? Icons.close_rounded : Icons.search_rounded,
+                  ),
+                ),
+                IconButton(
+                  key: const Key('library-import-shared-album'),
+                  tooltip: context.tr('importSharedAlbum'),
+                  onPressed: _importSharedAlbum,
+                  icon: const Icon(Icons.link_rounded),
+                ),
+                IconButton(
+                  key: const Key('library-create-album'),
+                  tooltip: context.tr('createAlbum'),
+                  onPressed: () => context.push('/albums/new'),
+                  icon: const Icon(Icons.add_rounded),
+                ),
+              ],
             ),
-          ),
-          IconButton(
-            key: const Key('library-import-shared-album'),
-            tooltip: context.tr('importSharedAlbum'),
-            onPressed: _importSharedAlbum,
-            icon: const Icon(Icons.link_rounded),
-          ),
-          IconButton(
-            key: const Key('library-create-album'),
-            tooltip: context.tr('createAlbum'),
-            onPressed: () => context.push('/albums/new'),
-            icon: const Icon(Icons.add_rounded),
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: CustomScrollView(
+      body: Builder(
+        builder: (bodyCtx) => NotificationListener<ScrollStartNotification>(
+          onNotification: (_) {
+            SwipeActionGroup.closeAll(bodyCtx);
+            return false;
+          },
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: CustomScrollView(
           slivers: [
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
@@ -571,12 +908,23 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                                   _sort = value;
                                 }
                               });
+                              if (!_albums && value != 'reorder') {
+                                unawaited(
+                                  ref
+                                      .read(libraryCacheProvider)
+                                      .writeSongSort(value),
+                                );
+                              }
                               _load();
                             },
                             itemBuilder: (context) => [
                               for (final value in [
                                 'recent',
+                                if (!_albums) 'oldest',
                                 'name',
+                                if (!_albums) 'name_desc',
+                                if (!_albums) 'artist',
+                                if (!_albums) 'duration',
                                 if (_albums) 'order',
                               ])
                                 PopupMenuItem(
@@ -710,6 +1058,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                         isDownloaded: _downloadedTrackIds.contains(
                           'song:${song.id}',
                         ),
+                        selectable: _selecting,
+                        selected: _selectedSongIds.contains(song.id),
+                        onToggleSelect: () => _toggleSelectSong(song.id),
+                        onLongPress: () => _toggleSelectSong(song.id),
+                        onOptimisticFavorite: _replaceSongInList,
+                        onRollbackFavorite: _replaceSongInList,
+                        onChanged: _load,
                       );
                     }
                     final album = _albumItems[index];
@@ -757,6 +1112,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           ],
         ),
       ),
+      ),
+      ),
+    ),
     );
   }
 }

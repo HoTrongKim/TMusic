@@ -27,6 +27,7 @@
 TestResults/
 .test-artifacts/
 .local/
+**/.wrangler/
 *.log
 __pycache__/
 *.py[cod]

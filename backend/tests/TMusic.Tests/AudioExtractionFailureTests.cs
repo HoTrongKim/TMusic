@@ -20,6 +20,8 @@ public sealed class AudioExtractionFailureTests
     [InlineData("tiktok", "ERROR: TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED: source requires an access check")]
     [InlineData("youtube", "ERROR: TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED")]
     [InlineData("tiktok", "ERROR: TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED; Sign in to continue")]
+    [InlineData("youtube", "ERROR: [youtube] rYWLIJB214Q: Sign in to confirm you're not a bot. Use --cookies for authentication.")]
+    [InlineData("youtube", "ERROR: [youtube] rYWLIJB214Q: Sign in to confirm you\u2019re not a bot. Use --cookies for authentication.")]
     public void ExplicitAccessCheckMarkerStopsRetriesWithItsOwnCode(string provider, string standardError)
     {
         var error = YtDlpAudioExtractor.ClassifyFailure(provider, standardError);
@@ -54,6 +56,8 @@ public sealed class AudioExtractionFailureTests
     [InlineData("This video is DRM protected")]
     [InlineData("ERROR: Private video")]
     [InlineData("ERROR: This video is members-only")]
+    [InlineData("ERROR: Video unavailable")]
+    [InlineData("ERROR: HTTP Error 403: Forbidden")]
     [InlineData("ERROR: Sign in to confirm your account")]
     [InlineData("ERROR: File is larger than max-filesize")]
     [InlineData("ERROR: PRIVATE VIDEO; Unexpected response from webpage request")]
@@ -64,6 +68,31 @@ public sealed class AudioExtractionFailureTests
         Assert.Equal("SOURCE_RESTRICTED_OR_UNSUPPORTED", error.Code);
         Assert.False(error.Retryable);
     }
+
+    [Theory]
+    [InlineData("youtube", "ERROR: HTTP Error 429: Too Many Requests", "RATE_LIMITED", true)]
+    [InlineData("youtube", "ERROR: [youtube] Requested format is not available", "SOURCE_AUDIO_UNAVAILABLE", false)]
+    [InlineData("youtube", "ERROR: [youtube] Unable to extract uploader id", "SOURCE_RESPONSE_UNSUPPORTED", false)]
+    [InlineData("youtube", "TMUSIC_YTDLP_COMPATIBILITY_ERROR", "AUDIO_ENGINE_UNAVAILABLE", false)]
+    public void ExtendedProviderFailuresClassifyAccurately(string provider, string standardError, string expectedCode, bool expectedRetryable)
+    {
+        var error = YtDlpAudioExtractor.ClassifyFailure(provider, standardError);
+
+        Assert.Equal(expectedCode, error.Code);
+        Assert.Equal(expectedRetryable, error.Retryable);
+        Assert.Equal(expectedRetryable, YtDlpAudioExtractor.IsRetryableErrorCode(error.Code));
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(128, true)]
+    [InlineData(192, true)]
+    [InlineData(320, true)]
+    [InlineData(64, false)]
+    [InlineData(256, false)]
+    [InlineData(0, false)]
+    public void AudioBitrateValidationAcceptsOnlySupportedOptions(int? kbps, bool expected)
+        => Assert.Equal(expected, AudioBitrate.IsValid(kbps));
 
     [Theory]
     [InlineData("")]

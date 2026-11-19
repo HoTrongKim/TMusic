@@ -7,6 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme/tmusic_theme.dart';
 import '../../core/localization/app_copy.dart';
 import '../../core/widgets/common.dart';
+import '../../shared/models/library_models.dart';
+import '../library/library_repository.dart';
+import '../songs/song_actions.dart';
 import 'local_audio.dart';
 
 String formatPlayerClock(Duration d) {
@@ -871,16 +874,41 @@ class _SpotifyModePill extends StatelessWidget {
 /// Authentic Spotify Full-Screen Now Playing Sheet (matching Reference Screenshots 2 & 5):
 /// Dynamic Album-Toned Full-Bleed Gradient -> PLAYING FROM ALBUM header ->
 /// Centered Square Cover -> Left-aligned Title/Artist + Green Check Badge -> Slim White Seekbar.
-class NowPlayingSheet extends StatefulWidget {
+class NowPlayingSheet extends ConsumerStatefulWidget {
   const NowPlayingSheet({super.key, required this.player});
   final LocalAudio player;
 
   @override
-  State<NowPlayingSheet> createState() => _NowPlayingSheetState();
+  ConsumerState<NowPlayingSheet> createState() => _NowPlayingSheetState();
 }
 
-class _NowPlayingSheetState extends State<NowPlayingSheet> {
+class _NowPlayingSheetState extends ConsumerState<NowPlayingSheet> {
   bool _showQueue = false;
+  String? _loadedSongId;
+  Song? _currentSong;
+
+  Future<void> _syncLibrarySong(String mediaItemId) async {
+    if (!mediaItemId.startsWith('song:')) {
+      if (_loadedSongId != null) {
+        _loadedSongId = null;
+        if (mounted) setState(() => _currentSong = null);
+      }
+      return;
+    }
+    final songId = mediaItemId.substring(5);
+    if (_loadedSongId == songId) return;
+    _loadedSongId = songId;
+    try {
+      final song = await ref.read(libraryRepositoryProvider).song(songId);
+      if (mounted && _loadedSongId == songId) {
+        setState(() => _currentSong = song);
+      }
+    } catch (_) {
+      if (mounted && _loadedSongId == songId) {
+        setState(() => _currentSong = null);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -900,6 +928,16 @@ class _NowPlayingSheetState extends State<NowPlayingSheet> {
               padding: const EdgeInsets.all(24),
               child: Text(context.tr('noLocal')),
             ),
+          );
+        }
+        if (item.id.startsWith('song:') &&
+            _loadedSongId != item.id.substring(5)) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _syncLibrarySong(item.id),
+          );
+        } else if (!item.id.startsWith('song:') && _loadedSongId != null) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _syncLibrarySong(item.id),
           );
         }
         final ambient = albumAmbientColor(
@@ -1045,20 +1083,56 @@ class _NowPlayingSheetState extends State<NowPlayingSheet> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              Container(
-                                width: 28,
-                                height: 28,
-                                decoration: const BoxDecoration(
-                                  color: TMusicTheme.spotifyGreen,
-                                  shape: BoxShape.circle,
+                              const SizedBox(width: 8),
+                              if (_currentSong case final activeSong?) ...[
+                                IconButton(
+                                  key: const Key('now-playing-favorite'),
+                                  tooltip: context.tr(
+                                    activeSong.favorite
+                                        ? 'favoriteRemove'
+                                        : 'favoriteAdd',
+                                  ),
+                                  onPressed: () => SongActions.toggleFavorite(
+                                    context,
+                                    ref,
+                                    activeSong,
+                                    onOptimistic: (u) {
+                                      if (mounted) {
+                                        setState(() => _currentSong = u);
+                                      }
+                                    },
+                                    onRollback: (o) {
+                                      if (mounted) {
+                                        setState(() => _currentSong = o);
+                                      }
+                                    },
+                                  ),
+                                  icon: Icon(
+                                    activeSong.favorite
+                                        ? Icons.favorite_rounded
+                                        : Icons.favorite_border_rounded,
+                                    color: activeSong.favorite
+                                        ? const Color(0xFFE05263)
+                                        : scheme.onSurface,
+                                  ),
                                 ),
-                                child: const Icon(
-                                  Icons.check_rounded,
-                                  size: 18,
-                                  color: Colors.black,
+                                IconButton(
+                                  key: const Key('now-playing-add-album'),
+                                  tooltip: context.tr('addToAlbum'),
+                                  onPressed: () async {
+                                    final changed =
+                                        await SongActions.openAlbumPicker(
+                                          context,
+                                          songs: [activeSong],
+                                        );
+                                    if (changed == true) {
+                                      _loadedSongId = null;
+                                      await _syncLibrarySong(item.id);
+                                    }
+                                  },
+                                  icon: const Icon(Icons.playlist_add_rounded),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                           const SizedBox(height: 10),

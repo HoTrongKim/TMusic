@@ -95,6 +95,8 @@ public static class ProviderEndpoints
         if (string.IsNullOrWhiteSpace(request.Url)) return ApiSupport.Problem("INVALID_SOURCE_URL");
         if (!request.RightsConfirmed)
             return ApiSupport.Problem("RIGHTS_CONFIRMATION_REQUIRED", 400, "Vui lòng xác nhận bạn có quyền tải nội dung này cho mục đích cá nhân.");
+        if (!AudioBitrate.IsValid(request.BitrateKbps))
+            return ApiSupport.Problem("INVALID_BITRATE", 400, "Bitrate MP3 chỉ hỗ trợ 128, 192 hoặc 320 kbps.");
         if (!extractor.IsAvailable)
             return ApiSupport.Problem("AUDIO_DOWNLOAD_UNAVAILABLE", 503, "Bộ xử lý tải MP3 (yt-dlp / FFmpeg) hiện chưa sẵn sàng.");
 
@@ -103,7 +105,7 @@ public static class ProviderEndpoints
         try
         {
             var resolved = await resolver.ResolveAsync(request.Url, ct);
-            var mp3Path = await extractor.ExtractMp3Async(resolved.CanonicalUrl, tempDir, (_, _) => Task.CompletedTask, ct);
+            var mp3Path = await extractor.ExtractMp3Async(resolved.CanonicalUrl, tempDir, (_, _) => Task.CompletedTask, request.BitrateKbps, ct);
             var info = new FileInfo(mp3Path);
             if (!info.Exists || info.Length is <= 16 or > AudioStorage.MaxAudioBytes)
                 return ApiSupport.Problem("INVALID_AUDIO_OUTPUT", 422);
@@ -124,5 +126,5 @@ public static class ProviderEndpoints
     }
 
     private sealed record ResolveRequest(string? Url);
-    private sealed record GuestExtractRequest(string? Url, bool RightsConfirmed = false);
+    private sealed record GuestExtractRequest(string? Url, bool RightsConfirmed = false, int? BitrateKbps = null);
 }

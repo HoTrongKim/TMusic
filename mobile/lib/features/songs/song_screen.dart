@@ -16,6 +16,7 @@ import '../library/library_repository.dart';
 import '../playback/local_audio.dart';
 import '../playback/local_audio_screen.dart';
 import '../share/shared_links.dart';
+import 'song_actions.dart';
 
 /// Music-First Song Detail & Playback Stage Screen
 class SongScreen extends ConsumerStatefulWidget {
@@ -87,7 +88,9 @@ class _SongScreenState extends ConsumerState<SongScreen> {
       }
       if (mounted &&
           !s.isGuestLocal &&
-          (s.audioStatus == 'QUEUED' || s.audioStatus == 'RUNNING')) {
+          (s.audioStatus == 'QUEUED' ||
+              s.audioStatus == 'RUNNING' ||
+              s.audioStatus == 'FAILED')) {
         _resumePollingForSong(s);
       }
     } catch (e) {
@@ -100,10 +103,19 @@ class _SongScreenState extends ConsumerState<SongScreen> {
   Future<void> _resumePollingForSong(Song s) async {
     try {
       final jobs = await ref.read(libraryRepositoryProvider).downloadJobs();
-      final match = jobs.items
+      final active = jobs.items
           .where((j) => j.songId == s.id && j.isActive)
           .firstOrNull;
-      if (match != null) _pollJob(s, match.id);
+      if (active != null) {
+        _pollJob(s, active.id);
+        return;
+      }
+      final failed = jobs.items
+          .where((j) => j.songId == s.id && j.status == 'FAILED')
+          .firstOrNull;
+      if (failed != null && mounted) {
+        setState(() => _activeJob = failed);
+      }
     } catch (_) {}
   }
 
@@ -228,19 +240,6 @@ class _SongScreenState extends ConsumerState<SongScreen> {
           _error = e;
         });
       }
-    }
-  }
-
-  Future<void> _act(Future<void> Function() action) async {
-    setState(() => _busy = true);
-    try {
-      await action();
-      ref.read(libraryRevisionProvider.notifier).changed();
-      await _load();
-    } catch (e) {
-      if (mounted) setState(() => _error = e);
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -416,7 +415,10 @@ class _SongScreenState extends ConsumerState<SongScreen> {
                   const SizedBox(height: 14),
                 ] else if (_activeJob?.status == 'FAILED' ||
                     s.audioStatus == 'FAILED') ...[
-                  Notice(context.tr('mp3Failed'), error: true),
+                  Notice(
+                    downloadFailureText(context, _activeJob?.errorCode),
+                    error: true,
+                  ),
                 ],
                 if (inlinePlayer != null) ...[
                   LocalPlayerControls(inlinePlayer),
@@ -521,16 +523,12 @@ class _SongScreenState extends ConsumerState<SongScreen> {
                       onPressed: _busy
                           ? null
                           : () async {
-                              final album = await showTMusicSheet<Album>(
+                              final changed = await SongActions.openAlbumPicker(
                                 context,
-                                builder: (_) => const AlbumPicker(),
+                                songs: [s],
                               );
-                              if (album != null) {
-                                await _act(
-                                  () => ref
-                                      .read(libraryRepositoryProvider)
-                                      .addToAlbum(album, s),
-                                );
+                              if (changed == true && mounted) {
+                                await _load();
                               }
                             },
                       icon: const Icon(Icons.playlist_add_rounded),
@@ -608,28 +606,15 @@ class _SongScreenState extends ConsumerState<SongScreen> {
                     onPressed: _busy
                         ? null
                         : () async {
-                            if (!await confirmAction(
-                              context,
-                              context.tr('songDeleteTitle'),
-                              context.tr('songDeleteBody'),
-                            )) {
-                              return;
-                            }
-                            try {
-                              await ref
-                                  .read(libraryRepositoryProvider)
-                                  .deleteSong(s);
-                              try {
-                                await (await ref.read(
-                                  localLibraryProvider.future,
-                                )).removeSongTrack(s.id);
-                              } catch (_) {}
-                              ref
-                                  .read(libraryRevisionProvider.notifier)
-                                  .changed();
-                              if (context.mounted) context.pop();
-                            } catch (e) {
-                              if (mounted) setState(() => _error = e);
+                            final deleted =
+                                await SongActions.confirmAndDeleteFromLibrary(
+                                  context,
+                                  ref,
+                                  s,
+                                  hasLocalMp3: _hasLocalMp3 || s.audioReady,
+                                );
+                            if (deleted && context.mounted) {
+                              context.pop();
                             }
                           },
                     icon: const Icon(Icons.delete_outline_rounded),

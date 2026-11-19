@@ -244,6 +244,23 @@ class Song {
   };
 }
 
+bool isRetryableDownloadError(String? errorCode) =>
+    switch (errorCode?.trim().toUpperCase()) {
+      'SOURCE_ACCESS_CHECK_REQUIRED' ||
+      'SOURCE_AUDIO_UNAVAILABLE' ||
+      'SOURCE_RESTRICTED_OR_UNSUPPORTED' ||
+      'SOURCE_RESPONSE_UNSUPPORTED' ||
+      'SOURCE_UNAVAILABLE' ||
+      'AUDIO_CONVERSION_FAILED' ||
+      'AUDIO_INPUT_INVALID' ||
+      'AUDIO_ENGINE_UNAVAILABLE' ||
+      'RIGHTS_CONFIRMATION_REQUIRED' ||
+      'INVALID_SOURCE_URL' ||
+      'UNSUPPORTED_SOURCE_URL' ||
+      'INVALID_BITRATE' => false,
+      _ => true,
+    };
+
 class AudioDownloadJob {
   const AudioDownloadJob({
     required this.id,
@@ -256,6 +273,8 @@ class AudioDownloadJob {
     this.songTitle,
     this.songArtist,
     this.errorCode,
+    this.retryable,
+    this.bitrateKbps,
     this.audioStreamUrl,
     this.outputSizeBytes,
   });
@@ -264,9 +283,13 @@ class AudioDownloadJob {
   final int progressPercent;
   final bool audioReady;
   final String? songTitle, songArtist, errorCode, audioStreamUrl;
-  final int? outputSizeBytes;
+  final bool? retryable;
+  final int? bitrateKbps, outputSizeBytes;
 
   bool get isActive => status == 'QUEUED' || status == 'RUNNING';
+  bool get isRetryable =>
+      status == 'CANCELED' ||
+      (status == 'FAILED' && (retryable ?? isRetryableDownloadError(errorCode)));
   String get providerLabel => providerDisplayLabel(provider);
 
   factory AudioDownloadJob.fromJson(Map<String, dynamic> j) => AudioDownloadJob(
@@ -279,6 +302,8 @@ class AudioDownloadJob {
     status: j['status'] as String? ?? 'QUEUED',
     progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
     errorCode: j['errorCode'] as String?,
+    retryable: j['retryable'] as bool?,
+    bitrateKbps: (j['bitrateKbps'] as num?)?.toInt(),
     audioReady: j['audioReady'] == true,
     audioStreamUrl: j['audioStreamUrl'] as String?,
     outputSizeBytes: (j['outputSizeBytes'] as num?)?.toInt(),

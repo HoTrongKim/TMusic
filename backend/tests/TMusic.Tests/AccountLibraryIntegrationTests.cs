@@ -103,4 +103,30 @@ public sealed class AccountLibraryIntegrationTests(SqlApiFixture fixture)
         Assert.False(await db.Albums.AnyAsync(x=>x.OwnerId==account.UserId));
         Assert.False(await db.UserSessions.AnyAsync(x=>x.UserId==account.UserId));
     }
+
+    [SqlFact]
+    public async Task New_account_defaults_to_dark_theme_and_supports_extended_song_sorting()
+    {
+        var account=await fixture.RegisterAsync(); using var client=fixture.Client(account.AccessToken);
+        var settings=await Json(await client.GetAsync("/api/v1/users/me/settings"));
+        Assert.Equal("dark",settings.GetProperty("theme").GetString());
+
+        await Json(await client.PostAsJsonAsync("/api/v1/library/songs",new{url="https://youtu.be/SortTest001",customTitle="Zeta",customArtist="Bravo"}));
+        await Json(await client.PostAsJsonAsync("/api/v1/library/songs",new{url="https://youtu.be/SortTest002",customTitle="Alpha",customArtist="Charlie"}));
+
+        var byName=await Json(await client.GetAsync("/api/v1/library/songs?sort=name"));
+        Assert.Equal("Alpha",byName.GetProperty("items")[0].GetProperty("customTitle").GetString());
+
+        var byNameDesc=await Json(await client.GetAsync("/api/v1/library/songs?sort=name_desc"));
+        Assert.Equal("Zeta",byNameDesc.GetProperty("items")[0].GetProperty("customTitle").GetString());
+
+        var byArtist=await Json(await client.GetAsync("/api/v1/library/songs?sort=artist"));
+        Assert.Equal("Zeta",byArtist.GetProperty("items")[0].GetProperty("customTitle").GetString());
+
+        var byOldest=await Json(await client.GetAsync("/api/v1/library/songs?sort=oldest"));
+        Assert.Equal("Zeta",byOldest.GetProperty("items")[0].GetProperty("customTitle").GetString());
+
+        var byDuration=await Json(await client.GetAsync("/api/v1/library/songs?sort=duration"));
+        Assert.Equal(2,byDuration.GetProperty("total").GetInt32());
+    }
 }

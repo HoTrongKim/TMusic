@@ -4,6 +4,7 @@ import UIKit
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var sharing: FlutterMethodChannel?
+  private var appInfo: FlutterMethodChannel?
   override func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
     if let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
       try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -24,6 +25,14 @@ import UIKit
       let values = shared.stringArray(forKey: "pendingLinks") ?? []
       shared.removeObject(forKey: "pendingLinks")
       result(values)
+    }
+    appInfo = FlutterMethodChannel(name: "tmusic/app_info", binaryMessenger: registrar.messenger())
+    appInfo?.setMethodCallHandler { call, result in
+      guard call.method == "getAppInfo" else { result(FlutterMethodNotImplemented); return }
+      let info = Bundle.main.infoDictionary
+      let version = info?["CFBundleShortVersionString"] as? String ?? ""
+      let buildNumber = info?["CFBundleVersion"] as? String ?? ""
+      result(["version": version, "buildNumber": buildNumber])
     }
   }
 }

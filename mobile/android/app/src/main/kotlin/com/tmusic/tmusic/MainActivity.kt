@@ -1,6 +1,8 @@
 package com.tmusic.tmusic
 
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -17,6 +19,35 @@ class MainActivity : AudioServiceActivity() {
                 pending.clear()
             } else result.notImplemented()
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tmusic/app_info")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "getAppInfo") {
+                    try {
+                        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            packageManager.getPackageInfo(packageName, 0)
+                        }
+                        val buildNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            info.longVersionCode.toString()
+                        } else {
+                            @Suppress("DEPRECATION")
+                            info.versionCode.toString()
+                        }
+                        result.success(
+                            mapOf(
+                                "version" to (info.versionName ?: ""),
+                                "buildNumber" to buildNumber
+                            )
+                        )
+                    } catch (_: Exception) {
+                        result.success(mapOf("version" to "", "buildNumber" to ""))
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
         receive(intent)
     }
     override fun onNewIntent(intent: Intent) {

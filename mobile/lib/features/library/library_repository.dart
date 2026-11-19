@@ -477,6 +477,7 @@ class LibraryRepository {
     List<String> albums, {
     bool downloadMp3 = false,
     bool rightsConfirmed = false,
+    int? bitrateKbps,
   }) async {
     if (isGuest) {
       LinkPreview? preview;
@@ -498,7 +499,7 @@ class LibraryRepository {
       );
       if (downloadMp3 && rightsConfirmed) {
         try {
-          await startSongDownload(saved.id);
+          await startSongDownload(saved.id, bitrateKbps: bitrateKbps);
         } catch (_) {
           // The source stays saved; its failed job is visible and retryable.
         }
@@ -517,6 +518,7 @@ class LibraryRepository {
           'albumIds': albums,
           'downloadMp3': downloadMp3,
           'rightsConfirmed': rightsConfirmed,
+          'bitrateKbps': ?bitrateKbps,
         },
       ),
     );
@@ -525,6 +527,7 @@ class LibraryRepository {
   Future<AudioDownloadJob> startSongDownload(
     String songId, {
     bool force = false,
+    int? bitrateKbps,
   }) async {
     if (isGuest || songId.startsWith('guest-')) {
       final s = await guestStore.getSong(songId);
@@ -532,7 +535,11 @@ class LibraryRepository {
       try {
         final bytes = await publicApi.postBytes(
           '/guest/songs/extract-mp3',
-          data: {'url': s.url, 'rightsConfirmed': true},
+          data: {
+            'url': s.url,
+            'rightsConfirmed': true,
+            'bitrateKbps': ?bitrateKbps,
+          },
         );
         final local = await openLocalLibrary('guest');
         await local.saveDownloadedSongMp3(s, bytes);
@@ -548,7 +555,11 @@ class LibraryRepository {
       await api.request(
         'POST',
         '/library/songs/$songId/download',
-        data: {'rightsConfirmed': true, 'forceRedownload': force},
+        data: {
+          'rightsConfirmed': true,
+          'forceRedownload': force,
+          'bitrateKbps': ?bitrateKbps,
+        },
       ),
     );
   }

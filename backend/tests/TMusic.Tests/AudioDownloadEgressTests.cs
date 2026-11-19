@@ -20,6 +20,9 @@ public sealed class AudioDownloadEgressTests
     [InlineData("tiktok", "v16.tiktokcdn.com.evil.example", false)]
     [InlineData("soundcloud", "api-v2.soundcloud.com", true)]
     [InlineData("soundcloud", "cf-media.sndcdn.com", true)]
+    [InlineData("soundcloud", "playback.media-streaming.soundcloud.cloud", true)]
+    [InlineData("soundcloud", "evil-soundcloud.cloud", false)]
+    [InlineData("youtube", "playback.media-streaming.soundcloud.cloud", false)]
     [InlineData("soundcloud", "accounts.google.com", false)]
     public void DestinationPolicyMatchesOnlyProviderHostsAndKnownCdnBoundaries(string provider, string host, bool expected)
         => Assert.Equal(expected, AudioDownloadEgressProxy.IsAllowedHost(provider, host));

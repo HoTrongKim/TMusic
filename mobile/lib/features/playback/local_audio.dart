@@ -230,6 +230,24 @@ class LocalLibrary {
     if (await file.exists()) await file.delete();
     await db?.delete('tracks', where: 'id=?', whereArgs: [track.id]);
   }
+
+  /// Calculates actual disk bytes occupied by user-managed audio files (excludes SQLite index).
+  Future<int> storageUsageBytes() async {
+    final dir = directory;
+    if (dir == null || !await dir.exists()) return 0;
+    var total = 0;
+    try {
+      await for (final entity in dir.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final name = entity.uri.pathSegments.isEmpty
+            ? ''
+            : entity.uri.pathSegments.last.toLowerCase();
+        if (name.startsWith('index.db')) continue;
+        total += await entity.length();
+      }
+    } catch (_) {}
+    return total;
+  }
 }
 
 final localAudioProvider = FutureProvider<LocalAudio>((ref) async {
@@ -343,15 +361,7 @@ class LocalAudio extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
     abLoop.value = null;
     final items = tracks
-        .map(
-          (t) => MediaItem(
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            album: albumName ?? 'TMusic MP3',
-            artUri: t.artUrl != null ? Uri.tryParse(t.artUrl!) : null,
-          ),
-        )
+        .map((t) => _toMediaItem(t, albumName: albumName))
         .toList();
     queue.add(items);
     final p = _player;
@@ -363,6 +373,100 @@ class LocalAudio extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
     mediaItem.add(items[index]);
     play();
+  }
+
+  MediaItem _toMediaItem(LocalTrack t, {String? albumName}) => MediaItem(
+    id: t.id,
+    title: t.title,
+    artist: t.artist,
+    album: albumName ?? 'TMusic MP3',
+    artUri: t.artUrl != null ? Uri.tryParse(t.artUrl!) : null,
+  );
+
+  Future<void> playNext(LocalTrack track, {String? albumName}) async {
+    if (!File(track.path).isAbsolute) {
+      throw const FormatException('Đường dẫn không hợp lệ.');
+    }
+    if (_player != null && !await File(track.path).exists()) {
+      throw const FormatException('File không còn tồn tại. Hãy thêm lại.');
+    }
+    final currentQueue = List<MediaItem>.from(queue.value);
+    if (currentQueue.isEmpty || mediaItem.value == null) {
+      await start([track], 0, albumName: albumName);
+      return;
+    }
+    final currentIndex =
+        _player?.currentIndex ?? playbackState.value.queueIndex ?? 0;
+    final insertIndex = (currentIndex + 1).clamp(0, currentQueue.length);
+    final item = _toMediaItem(track, albumName: albumName);
+    final p = _player;
+    if (p != null) {
+      await p.insertAudioSource(insertIndex, AudioSource.file(track.path));
+    }
+    currentQueue.insert(insertIndex, item);
+    queue.add(currentQueue);
+  }
+
+  Future<void> addToQueue(LocalTrack track, {String? albumName}) async {
+    if (!File(track.path).isAbsolute) {
+      throw const FormatException('Đường dẫn không hợp lệ.');
+    }
+    if (_player != null && !await File(track.path).exists()) {
+      throw const FormatException('File không còn tồn tại. Hãy thêm lại.');
+    }
+    final currentQueue = List<MediaItem>.from(queue.value);
+    if (currentQueue.isEmpty || mediaItem.value == null) {
+      await start([track], 0, albumName: albumName);
+      return;
+    }
+    final item = _toMediaItem(track, albumName: albumName);
+    final p = _player;
+    if (p != null) {
+      await p.addAudioSource(AudioSource.file(track.path));
+    }
+    currentQueue.add(item);
+    queue.add(currentQueue);
+  }
+
+  /// Safely removes a deleted song from active playback or queue without leaving broken audio state.
+  Future<void> removeSongFromQueue(String songId) async {
+    final targetId = 'song:$songId';
+    final currentQueue = List<MediaItem>.from(queue.value);
+    final matchingIndices = <int>[];
+    for (var i = 0; i < currentQueue.length; i++) {
+      if (currentQueue[i].id == targetId) matchingIndices.add(i);
+    }
+    if (matchingIndices.isEmpty) return;
+    if (matchingIndices.length == currentQueue.length) {
+      await stop();
+      return;
+    }
+    final wasPlayingTarget = mediaItem.value?.id == targetId;
+    final p = _player;
+    for (final index in matchingIndices.reversed) {
+      currentQueue.removeAt(index);
+      if (p != null) {
+        await p.removeAudioSourceAt(index);
+      }
+    }
+    queue.add(currentQueue);
+    if (wasPlayingTarget) {
+      abLoop.value = null;
+      final nextIndex =
+          (p?.currentIndex ?? playbackState.value.queueIndex ?? 0).clamp(
+            0,
+            currentQueue.length - 1,
+          );
+      mediaItem.add(currentQueue[nextIndex]);
+      if (p == null) {
+        playbackState.add(
+          playbackState.value.copyWith(
+            queueIndex: nextIndex,
+            updatePosition: Duration.zero,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> seekRelative(Duration delta) async {

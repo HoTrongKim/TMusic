@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../shared/models/library_models.dart';
 import '../api/api_client.dart';
+import 'app_metadata.dart';
 
 final guestLibraryStoreProvider = Provider<GuestLibraryStore>(
   (_) => GuestLibraryStore(),
@@ -113,19 +114,19 @@ class GuestLibraryStore {
     bool? favorite,
   }) async {
     final (allAlbums, _) = await exportAll();
-    final q = query.trim().toLowerCase();
+    final q = normalizeVietnamese(query);
     var filtered = allAlbums.where((a) {
       if (favorite != null && a.isFavorite != favorite) return false;
       if (q.isNotEmpty &&
-          !a.name.toLowerCase().contains(q) &&
-          !(a.description ?? '').toLowerCase().contains(q)) {
+          !normalizeVietnamese(a.name).contains(q) &&
+          !normalizeVietnamese(a.description ?? '').contains(q)) {
         return false;
       }
       return true;
     }).toList();
 
     if (sort == 'name') {
-      filtered.sort((a, b) => a.name.compareTo(b.name));
+      filtered.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     } else if (sort == 'order') {
       filtered.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
     }
@@ -248,10 +249,12 @@ class GuestLibraryStore {
       if (favorite != null && song.favorite != favorite) return false;
       if (unorganized == true && song.albumIds.isNotEmpty) return false;
       if (unorganized == false && song.albumIds.isEmpty) return false;
-      if (q.isNotEmpty &&
-          !song.title.toLowerCase().contains(q) &&
-          !(song.artist ?? '').toLowerCase().contains(q) &&
-          !(song.originalCreator ?? '').toLowerCase().contains(q)) {
+      final nq = normalizeVietnamese(q);
+      if (nq.isNotEmpty &&
+          !normalizeVietnamese(song.title).contains(nq) &&
+          !normalizeVietnamese(song.artist ?? '').contains(nq) &&
+          !normalizeVietnamese(song.originalCreator ?? '').contains(nq) &&
+          !normalizeVietnamese(song.originalTitle ?? '').contains(nq)) {
         return false;
       }
       return true;
@@ -269,8 +272,36 @@ class GuestLibraryStore {
           return (ia < 0 ? 9999 : ia).compareTo(ib < 0 ? 9999 : ib);
         });
       }
-    } else if (sort == 'name') {
-      filtered.sort((a, b) => a.title.compareTo(b.title));
+    } else {
+      switch (sort) {
+        case 'oldest':
+          filtered = filtered.reversed.toList();
+        case 'name':
+          filtered.sort(
+            (a, b) => normalizeVietnamese(a.title)
+                .compareTo(normalizeVietnamese(b.title)),
+          );
+        case 'name_desc':
+          filtered.sort(
+            (a, b) => normalizeVietnamese(b.title)
+                .compareTo(normalizeVietnamese(a.title)),
+          );
+        case 'artist':
+          filtered.sort((a, b) {
+            final aa = normalizeVietnamese(a.artist ?? a.originalCreator ?? '');
+            final bb = normalizeVietnamese(b.artist ?? b.originalCreator ?? '');
+            final cmp = aa.compareTo(bb);
+            return cmp != 0
+                ? cmp
+                : normalizeVietnamese(a.title)
+                    .compareTo(normalizeVietnamese(b.title));
+          });
+        case 'duration':
+          filtered.sort(
+            (a, b) => (b.durationSeconds ?? -1)
+                .compareTo(a.durationSeconds ?? -1),
+          );
+      }
     }
     return PageResult(filtered, filtered.length, 1, max(50, filtered.length));
   }

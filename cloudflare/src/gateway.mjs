@@ -1,9 +1,9 @@
-function tunnelOrigin(raw) {
+function upstreamOrigin(raw) {
   try {
     const url = new URL(raw);
     if (url.protocol !== 'https:' || url.username || url.password || url.port ||
         url.pathname !== '/' || url.search || url.hash ||
-        !/^[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com$/.test(url.hostname)) return null;
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*\.(?:trycloudflare\.com|up\.railway\.app)$/.test(url.hostname)) return null;
     return url.origin;
   } catch {
     return null;
@@ -12,7 +12,7 @@ function tunnelOrigin(raw) {
 
 export default {
   async fetch(request, env) {
-    const origin = tunnelOrigin(env.TMUSIC_UPSTREAM);
+    const origin = upstreamOrigin(env.TMUSIC_UPSTREAM);
     if (!origin) return new Response('TMusic tạm thời chưa kết nối được máy chủ.', { status: 503 });
     const incoming = new URL(request.url);
     const destination = new URL(origin);

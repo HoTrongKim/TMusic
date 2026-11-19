@@ -36,10 +36,17 @@ public static class SongEndpoints
     }
     private static async Task<IResult> List(ClaimsPrincipal u,TMusicDb db,TimeProvider time,int? page,int? pageSize,string? q,string? provider,bool? favorite,bool? unorganized,string? sort,CancellationToken ct)
     {
-        if (!ApiSupport.PageValid(page,pageSize,q) || provider is not (null or "" or "youtube" or "tiktok" or "soundcloud") || sort is not (null or "recent" or "name")) return ApiSupport.Problem("INVALID_QUERY");
+        if (!ApiSupport.PageValid(page,pageSize,q) || provider is not (null or "" or "youtube" or "tiktok" or "soundcloud") || sort is not (null or "recent" or "oldest" or "name" or "name_desc" or "artist" or "duration")) return ApiSupport.Problem("INVALID_QUERY");
         var now=time.GetUtcNow();
         var query=Filter(db,ApiSupport.UserId(u),now,q,provider,favorite,unorganized); var total=await query.CountAsync(ct); var current=page??1; var size=pageSize??30;
-        var sorted=sort=="name"?query.OrderBy(x=>x.CustomTitle).ThenBy(x=>x.Id):query.OrderByDescending(x=>x.CreatedAt).ThenBy(x=>x.Id);
+        var sorted=sort switch {
+            "oldest"=>query.OrderBy(x=>x.CreatedAt).ThenBy(x=>x.Id),
+            "name"=>query.OrderBy(x=>x.CustomTitle).ThenBy(x=>x.Id),
+            "name_desc"=>query.OrderByDescending(x=>x.CustomTitle).ThenBy(x=>x.Id),
+            "artist"=>query.OrderBy(x=>x.CustomArtist ?? x.Song.OriginalCreator ?? "").ThenBy(x=>x.CustomTitle).ThenBy(x=>x.Id),
+            "duration"=>query.OrderByDescending(x=>x.Song.DurationSeconds ?? -1).ThenBy(x=>x.CustomTitle).ThenBy(x=>x.Id),
+            _=>query.OrderByDescending(x=>x.CreatedAt).ThenBy(x=>x.Id)
+        };
         var items=await sorted.Skip((current-1)*size).Take(size).Include(x=>x.Song).Include(x=>x.AlbumSongs).AsSplitQuery().ToListAsync(ct);
         return Results.Ok(new {items=items.Select(x=>LibraryViews.Song(x,now)),total,page=current,pageSize=size});
     }
@@ -57,6 +64,7 @@ public static class SongEndpoints
         if (r.DownloadMp3)
         {
             if (!r.RightsConfirmed) return ApiSupport.Problem("RIGHTS_CONFIRMATION_REQUIRED",400,"Vui lòng xác nhận bạn có quyền tải nội dung này cho mục đích cá nhân.");
+            if (!AudioBitrate.IsValid(r.BitrateKbps)) return ApiSupport.Problem("INVALID_BITRATE",400,"Bitrate MP3 chỉ hỗ trợ 128, 192 hoặc 320 kbps.");
             if (!extractor.IsAvailable) return ApiSupport.Problem("AUDIO_DOWNLOAD_UNAVAILABLE",503,"Bộ xử lý tải MP3 (yt-dlp / FFmpeg) hiện chưa sẵn sàng.");
         }
         var user=ApiSupport.UserId(u); var albumIds=(r.AlbumIds??[]).Distinct().ToArray();
@@ -115,6 +123,7 @@ public static class SongEndpoints
                     Provider=source.Provider,
                     CanonicalUrl=source.CanonicalUrl,
                     RightsConfirmed=true,
+                    BitrateKbps=r.BitrateKbps,
                     Status=ImportStatus.Queued,
                     ProgressPercent=0,
                     CreatedAt=now,
@@ -170,7 +179,7 @@ public static class SongEndpoints
             songs=new {items=songs.Select(x=>LibraryViews.Song(x,now)),total=await songsQuery.CountAsync(ct),page=current,pageSize=size} });
     }
     private static bool ValidTitle(string? title,string? artist) => title?.Trim() is { Length: >0 and <=200 } && artist?.Length is null or <=200;
-    public sealed record CreateSongRequest(string? Url,string? CustomTitle,string? CustomArtist,Guid[]? AlbumIds,bool DownloadMp3=false,bool RightsConfirmed=false);
+    public sealed record CreateSongRequest(string? Url,string? CustomTitle,string? CustomArtist,Guid[]? AlbumIds,bool DownloadMp3=false,bool RightsConfirmed=false,int? BitrateKbps=null);
     public sealed record EditSongRequest(string? CustomTitle,string? CustomArtist);
     public sealed record FavoriteRequest(bool IsFavorite);
 }
