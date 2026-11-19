@@ -57,8 +57,6 @@ public sealed class AudioExtractionFailureTests
     [InlineData("ERROR: Private video")]
     [InlineData("ERROR: This video is members-only")]
     [InlineData("ERROR: Video unavailable")]
-    [InlineData("ERROR: HTTP Error 403: Forbidden")]
-    [InlineData("ERROR: Sign in to confirm your account")]
     [InlineData("ERROR: File is larger than max-filesize")]
     [InlineData("ERROR: PRIVATE VIDEO; Unexpected response from webpage request")]
     public void ExistingPermanentRestrictionsRemainNonretryable(string standardError)
@@ -67,6 +65,24 @@ public sealed class AudioExtractionFailureTests
 
         Assert.Equal("SOURCE_RESTRICTED_OR_UNSUPPORTED", error.Code);
         Assert.False(error.Retryable);
+    }
+
+    [Theory]
+    [InlineData("youtube", "ERROR: HTTP Error 401: Unauthorized", "SOURCE_AUTHENTICATION_REQUIRED", false)]
+    [InlineData("youtube", "ERROR: Sign in to confirm your account", "SOURCE_AUTHENTICATION_REQUIRED", false)]
+    [InlineData("youtube", "ERROR: HTTP Error 403: Forbidden", "SOURCE_ACCESS_FORBIDDEN", false)]
+    [InlineData("youtube", "ERROR: Sign in to confirm you're not a bot", "SOURCE_ACCESS_CHECK_REQUIRED", false)]
+    [InlineData("youtube", "ERROR: Temporary failure in name resolution", "SOURCE_NETWORK_ERROR", true)]
+    [InlineData("youtube", "ERROR: HTTP Error 502: Bad Gateway", "SOURCE_NETWORK_ERROR", true)]
+    [InlineData("youtube", "ERROR: The read operation timed out", "SOURCE_NETWORK_ERROR", true)]
+    public void AuthenticationAccessAndNetworkFailuresHaveSeparateRetryPolicies(
+        string provider, string standardError, string expectedCode, bool retryable)
+    {
+        var error = YtDlpAudioExtractor.ClassifyFailure(provider, standardError);
+
+        Assert.Equal(expectedCode, error.Code);
+        Assert.Equal(retryable, error.Retryable);
+        Assert.Equal(retryable, YtDlpAudioExtractor.IsRetryableErrorCode(error.Code));
     }
 
     [Theory]
@@ -96,10 +112,8 @@ public sealed class AudioExtractionFailureTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("ERROR: The read operation timed out")]
-    [InlineData("ERROR: HTTP Error 503: Service Unavailable")]
-    [InlineData("ERROR: Connection reset by peer")]
-    public void OtherFailuresRetainTransientRetryBehavior(string standardError)
+    [InlineData("ERROR: extractor failed unexpectedly")]
+    public void UnclassifiedFailuresRetainBoundedRetryBehavior(string standardError)
     {
         var error = YtDlpAudioExtractor.ClassifyFailure("tiktok", standardError);
 
@@ -108,7 +122,29 @@ public sealed class AudioExtractionFailureTests
     }
 
     [Theory]
+    [InlineData("ERROR: The read operation timed out")]
+    [InlineData("ERROR: HTTP Error 503: Service Unavailable")]
+    [InlineData("ERROR: Connection reset by peer")]
+    public void NetworkFailuresUseTheNetworkCode(string standardError)
+    {
+        var error = YtDlpAudioExtractor.ClassifyFailure("tiktok", standardError);
+
+        Assert.Equal("SOURCE_NETWORK_ERROR", error.Code);
+        Assert.True(error.Retryable);
+    }
+
+    [Fact]
+    public void UnknownErrorCodesAreNotAutomaticallyRetried()
+    {
+        Assert.False(YtDlpAudioExtractor.IsRetryableErrorCode("UNRECOGNIZED_PERMANENT_ERROR"));
+        Assert.False(YtDlpAudioExtractor.IsRetryableErrorCode("AUDIO_STORAGE_REJECTED"));
+        Assert.True(YtDlpAudioExtractor.IsRetryableErrorCode("AUDIO_STORAGE_UNAVAILABLE"));
+    }
+
+    [Theory]
     [InlineData("TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED")]
+    [InlineData("SOURCE_AUTHENTICATION_REQUIRED")]
+    [InlineData("SOURCE_ACCESS_FORBIDDEN")]
     [InlineData("Unexpected response from webpage request")]
     [InlineData("Private video")]
     [InlineData("The read operation timed out")]

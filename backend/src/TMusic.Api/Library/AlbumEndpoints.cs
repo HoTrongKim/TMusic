@@ -273,12 +273,13 @@ public static class AlbumEndpoints
         return Results.Stream(opened.Value.Stream, opened.Value.ContentType);
     }
 
-    private static async Task<IResult> Songs(Guid id, ClaimsPrincipal u, TMusicDb db, TimeProvider time, int? page, int? pageSize, CancellationToken ct)
+    private static async Task<IResult> Songs(Guid id, ClaimsPrincipal u, TMusicDb db, TimeProvider time, int? page, int? pageSize, string? provider, CancellationToken ct)
     {
-        if (!ApiSupport.PageValid(page, pageSize)) return ApiSupport.Problem("INVALID_QUERY");
+        if (!ApiSupport.PageValid(page, pageSize) || provider is not (null or "" or "youtube" or "tiktok" or "soundcloud")) return ApiSupport.Problem("INVALID_QUERY");
         var user = ApiSupport.UserId(u);
         if (!await db.Albums.AnyAsync(x => x.Id == id && x.OwnerId == user, ct)) return Results.NotFound();
         var query = db.AlbumSongs.AsNoTrackingWithIdentityResolution().Where(x => x.AlbumId == id && x.UserId == user);
+        if (!string.IsNullOrWhiteSpace(provider)) query = query.Where(x => x.UserLibrarySong.Song.Provider == provider);
         var total = await query.CountAsync(ct);
         var current = page ?? 1;
         var size = pageSize ?? 30;
@@ -289,7 +290,7 @@ public static class AlbumEndpoints
         return Results.Ok(new { items = values.Select(x => LibraryViews.Song(x, time.GetUtcNow())), total, page = current, pageSize = size });
     }
 
-    private static async Task<IResult> AddSong(Guid id, MembershipRequest r, ClaimsPrincipal u, TMusicDb db, HttpContext context, IConfiguration config, TimeProvider time, CancellationToken ct)
+    private static async Task<IResult> AddSong(Guid id, MembershipRequest r, ClaimsPrincipal u, TMusicDb db, HttpContext context, TimeProvider time, CancellationToken ct)
     {
         var user = ApiSupport.UserId(u);
         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
@@ -299,8 +300,6 @@ public static class AlbumEndpoints
         var song = await db.UserLibrarySongs.Include(x => x.Song).FirstOrDefaultAsync(x => x.Id == r.UserLibrarySongId && x.UserId == user, ct);
         if (song is null) return Results.NotFound();
         if (await db.AlbumSongs.AnyAsync(x => x.AlbumId == id && x.UserLibrarySongId == song.Id, ct)) return Results.NoContent();
-        if (!LibraryViews.CanAttach(album, song.Song.Provider, config)) return ApiSupport.Problem("COLLECTION_POLICY_RESTRICTED", 409, "Album này giữ riêng dữ liệu theo nguồn.");
-        album.SourceBoundary ??= song.Song.Provider + ":bookmarks";
         album.UpdatedAt = time.GetUtcNow();
         var position = await db.AlbumSongs.Where(x => x.AlbumId == id).MaxAsync(x => (long?)x.Position, ct) ?? -1;
         db.AlbumSongs.Add(new AlbumSong { AlbumId = id, UserId = user, UserLibrarySongId = song.Id, Position = position + 1, AddedAt = time.GetUtcNow() });

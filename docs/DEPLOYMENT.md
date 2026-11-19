@@ -90,16 +90,25 @@ docker compose --profile dev-mail up -d
 docker build -f backend/Dockerfile -t tmusic-api:v2 .
 docker build -f backend/Worker.Dockerfile -t tmusic-worker:v2 .
 
-# Runtime audio tùy chọn (bật riêng khi cần MP3)
-docker build --build-arg INSTALL_AUDIO_TOOLS=true -f backend/Dockerfile -t tmusic-api-audio:v2 .
-docker build --build-arg INSTALL_AUDIO_TOOLS=true -f backend/Worker.Dockerfile -t tmusic-worker-audio:v2 .
+# Chỉ build biến thể không xử lý MP3 khi chủ đích cần image nhỏ hơn
+docker build --build-arg INSTALL_AUDIO_TOOLS=false -f backend/Dockerfile -t tmusic-api:no-audio .
+docker build --build-arg INSTALL_AUDIO_TOOLS=false -f backend/Worker.Dockerfile -t tmusic-worker:no-audio .
 ```
 
 ### Lưu ý vận hành Production
 1. Bắt buộc chạy sau reverse proxy TLS (`HTTPS`) — bản build Release của Flutter từ chối `TMUSIC_API_URL` không dùng `https://`.
 2. Gắn volume bền vững, writable cho runtime user, cho `DataProtection:KeyPath`, `Storage:CoversPath` và `Storage:AudioPath`. API/Worker tách dịch vụ phải dùng cùng audio storage. Compose gốc định nghĩa SQL Server/Mailpit; overlay `docker-compose.autostart.yml` ghép API và worker với cùng volume `/data`.
 3. Cung cấp khóa ký JWT, mật khẩu SMTP và API keys từ Secret Manager của hạ tầng triển khai.
-4. Image cơ bản không cài audio tools. Opt-in build cài Python3/FFmpeg và yt-dlp2026.10.26 có SHA256 pin; runtime vẫn cần `Features__EnableAudioDownloads=true`. Launcher TikTok chỉ xử lý trang công khai, tắt browser impersonation/header ngẫu nhiên và không chạy trình giải challenge upstream. Hai image audio đã được build trên Docker Linux; xem `BUILD_LOG.md` cho kết quả tải thực tế và `PROVIDER_INTEGRATION.md` cho giới hạn/runtime egress. Khi nâng yt-dlp phải review và kiểm thử lại adapter gắn với phiên bản đã pin.
+4. API và Worker Dockerfile mặc định cài Python 3, FFmpeg, Deno 2.9.8 và yt-dlp 2026.10.26; tải yt-dlp/Deno từ upstream release có SHA-256 kiểm tra. Runtime kiểm tra `yt-dlp --version` khớp bản trong image và chạy thử FFmpeg; runtime vẫn cần `Features__EnableAudioDownloads=true`. Có thể build image không có audio tools bằng `--build-arg INSTALL_AUDIO_TOOLS=false`, nhưng service tải MP3 không được dùng image đó. Khi nâng yt-dlp phải cập nhật version/hash đã review và kiểm thử lại.
+
+### Download queue và storage trên Railway
+
+- Queue SQL vẫn dùng các bảng hiện tại, lease/rowversion, tối đa 3 tổng lượt chạy, exponential backoff/jitter và timeout. `AudioDownload__Concurrency` bị chặn tối đa 2 job đồng thời **mỗi process**; nếu chạy API + Worker hoặc nhiều replicas, giới hạn tổng là số process nhân concurrency. Khi tách Worker, đặt `AudioDownload__RunInApiProcess=false` cho API và chỉ chạy một cấu hình `deploy/railway/worker.toml` cho service Worker.
+- Biến queue tùy chọn: `AudioDownload__Concurrency=2`, `AudioDownload__MaxAttempts=3`, `AudioDownload__TimeoutSeconds=180`, `AudioDownload__LeaseSeconds=480`, `AudioDownload__MaxBackoffSeconds=60`. Mã đăng nhập/challenge/403/nội dung giới hạn không retry tự động; lỗi mạng/429 và lỗi object store tạm thời mới retry hữu hạn. Lease tự tăng đủ bao phủ thời gian extraction + conversion.
+- `Storage:Provider` mặc định `local` để giữ dữ liệu cũ. Railway filesystem không bền vững nếu không có volume. Để dùng S3/R2, cấu hình Variables riêng trên API và Worker: `Storage__Provider=s3`, `Storage__Object__Endpoint=https://...`, `Storage__Object__Bucket=...`, `Storage__Object__Region=...`, `Storage__Object__AccessKey` và `Storage__Object__SecretKey` (hai giá trị credential chỉ nhập ở Railway Variables/secret manager, không commit hoặc đưa vào build args). Tùy chọn: `Storage__Object__Prefix=tmusic/audio`, `Storage__Object__PathStyle=true`, `Storage__Object__TimeoutSeconds=30`.
+- Khi bật S3, MP3 mới được lưu vào object storage; adapter đọc từ S3 trước rồi fallback sang file local hiện có, hỗ trợ byte-range cho player, và xóa song song ở hai nơi. Giữ volume `Storage__AudioPath` cũ gắn với API/Worker trong giai đoạn đọc dữ liệu legacy. Chưa tự động di chuyển tệp local lên bucket; kiểm kê và backup bucket/volume trước khi tháo volume. Bucket private, TLS bắt buộc bên ngoài loopback; không cấu hình public ACL.
+- API Railway hiện có `deploy/railway/api.toml`. API đọc biến `PORT` Railway và bind HTTP trên `0.0.0.0`; Worker không cần cổng HTTP. Chọn `deploy/railway/worker.toml` trong cấu hình Railway của service Worker để dùng `backend/Worker.Dockerfile`. Bật `Features__EnableAudioDownloads=true` chỉ sau khi đã cấu hình quyền tải, storage bền vững và secrets phù hợp.
+- Kiểm tra vận hành: deployment log phải xác nhận startup validation yt-dlp/FFmpeg; gọi `/api/v1/system/capabilities` để xem feature/binary; dùng tài khoản test và URL audio công khai được phép tải, chọn bitrate, theo dõi `/api/v1/downloads/{id}`, stream byte range, hủy job, rồi redeploy và đọc lại file để xác nhận storage bền vững. Ghi nhận `SOURCE_ACCESS_CHECK_REQUIRED`, `SOURCE_AUTHENTICATION_REQUIRED`, `SOURCE_ACCESS_FORBIDDEN`, `SOURCE_RESTRICTED_OR_UNSUPPORTED`, `SOURCE_NETWORK_ERROR` và `AUDIO_CONVERSION_FAILED` riêng. Không dùng nguồn yêu cầu login/anti-bot trong bài kiểm thử; chỉ retry lỗi mạng/429 hoặc storage tạm thời.
 
 ---
 

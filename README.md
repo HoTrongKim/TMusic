@@ -63,7 +63,7 @@ flutter run --dart-define=TMUSIC_API_URL=http://10.0.2.2:5078
 
 `/health/ready` kiểm tra SQL; `/api/v1/system/capabilities` phản ánh cấu hình và binary tìm thấy, không chứng minh OAuth/provider đã hoạt động trên thiết bị. MP3 cần `Features__EnableAudioDownloads=true`, `yt-dlp`, `FFmpeg`; API mặc định cũng xử lý download, hoặc tách Worker bằng `AudioDownload__RunInApiProcess=false`.
 
-Hai Dockerfile có runtime audio tùy chọn: thêm `--build-arg INSTALL_AUDIO_TOOLS=true` vào lệnh `docker build` để cài Python 3/FFmpeg và `yt-dlp` `2026.10.26` có kiểm tra SHA-256. Mặc định tắt để giữ image cơ bản; bật feature flag ở runtime là bước riêng. Cần storage audio bền vững/chia sẻ giữa API và Worker nếu tách dịch vụ. Thay đổi Dockerfile này chưa build được trên máy hiện tại vì Docker Linux engine chưa chạy; không suy ra live extraction từ bước đóng gói.
+Hai Dockerfile mặc định cài Python 3, FFmpeg, Deno `2.9.8` và `yt-dlp` `2026.10.26` có kiểm tra SHA-256; dùng `--build-arg INSTALL_AUDIO_TOOLS=false` chỉ khi chủ đích build image không xử lý MP3. Runtime vẫn cần `Features__EnableAudioDownloads=true`. Queue có concurrency cấu hình giới hạn 2/process; S3-compatible storage tùy chọn dùng `Storage__Provider=s3`, cấu hình chi tiết ở `docs/DEPLOYMENT.md`. Docker Linux engine hiện chưa chạy nên chưa build lại image trong lượt này; không suy ra live extraction từ các test mock/local.
 
 Chạy backend test với `TMUSIC_SQL_TEST_SERVER` trỏ tới SQL Server cho phép tạo database cô lập `TMusicV2Test_<guid>`; thiếu biến này sẽ bỏ qua SQL integration tests. `flutter test --no-pub` mặc định không chạy `integration_test/`. Bộ E2E thiết bị thay phiên lưu và ghi dữ liệu vào API đích, chỉ dùng app/database kiểm thử riêng.
 

@@ -5,8 +5,8 @@ RUN dotnet restore backend/src/TMusic.Worker/TMusic.Worker.csproj
 RUN dotnet publish backend/src/TMusic.Worker/TMusic.Worker.csproj -c Release --no-restore -o /out /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
-# Keep the optional audio runtime identical to the API image.
-ARG INSTALL_AUDIO_TOOLS=false
+# Keep the audio runtime identical to the API image.
+ARG INSTALL_AUDIO_TOOLS=true
 ARG YT_DLP_VERSION=2026.10.26
 ARG YT_DLP_SHA256=e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3
 ARG DENO_VERSION=2.9.8
@@ -52,6 +52,8 @@ RUN if [ "$INSTALL_AUDIO_TOOLS" = true ]; then \
     fi
 WORKDIR /app
 COPY --from=build /out/ ./
+ENV AudioDownload__YtDlpVersion=${YT_DLP_VERSION}
+ENV AudioDownload__DenoVersion=${DENO_VERSION}
 RUN mkdir -p /data/audio /data/covers /data/keys && chown -R "$APP_UID":0 /data
 USER $APP_UID
 ENTRYPOINT ["dotnet", "TMusic.Worker.dll"]

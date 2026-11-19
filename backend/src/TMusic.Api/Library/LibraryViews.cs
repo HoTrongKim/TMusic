@@ -23,10 +23,5 @@ public static class LibraryViews
     }
     public static object Album(Album album,int count) => new { album.Id,album.Name,album.Description,album.CoverImageUrl,
         album.SortOrder,album.IsFavorite,album.CreatedAt,album.UpdatedAt,album.Version,songCount=count };
-    public static bool CanAttach(Album album,string provider,IConfiguration config)
-    {
-        if (config.GetValue("Features:EnableCrossProviderMixedCollections",false)) return true;
-        return album.SourceBoundary is null || album.SourceBoundary==provider+":bookmarks";
-    }
 }
 

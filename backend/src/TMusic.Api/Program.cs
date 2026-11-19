@@ -24,6 +24,8 @@ using TMusic.Infrastructure.Storage;
 
 var builder=WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options=>options.Limits.MaxRequestBodySize=128*1024);
+if (int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var railwayPort) && railwayPort is > 0 and <= 65535)
+    builder.WebHost.UseUrls($"http://0.0.0.0:{railwayPort}");
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options=> {
     options.MultipartBodyLengthLimit=CoverImageStorage.MaxFileBytes+65_536;
 });
@@ -137,7 +139,7 @@ api.MapGet("/system/capabilities",(IExternalTokenVerifier verifier,IAccountMailS
     emailAuthentication=sessions.IsConfigured,passwordResetEmail=mail.IsConfigured,googleSignIn=verifier.Available("google"),appleSignIn=verifier.Available("apple"),
     youtubeMetadata=!string.IsNullOrWhiteSpace(c["YouTube:ApiKey"]),tikTokLinks=c.GetValue("Features:EnableTikTokVideoImport",true),
     soundCloudLinks=c.GetValue("Features:EnableSoundCloudImport",true),albumSharing=true,guestLocalMode=true,
-    multiPlaylistMerge=false,crossProviderMixedCollections=c.GetValue("Features:EnableCrossProviderMixedCollections",false),licensedAudioDownload=extractor.IsAvailable,
+    multiPlaylistMerge=false,crossProviderMixedCollections=true,licensedAudioDownload=extractor.IsAvailable,
     supportedAudioBitrates=AudioBitrate.Supported
 }));
 api.MapAccountEndpoints(); api.MapExternalAuthEndpoints(); api.MapAlbumEndpoints(); api.MapSongEndpoints();
@@ -157,8 +159,15 @@ public sealed class ApiDownloadBackgroundRunner(IServiceScopeFactory scopes,ICon
     {
         if (config.GetValue("Features:EnableAudioDownloads",false))
         {
-            if (extractor.IsAvailable) logger.LogInformation("Audio download tools validated at startup (yt-dlp and FFmpeg available).");
-            else logger.LogWarning("Audio downloads are enabled but required extraction binaries (yt-dlp / FFmpeg) were not found at startup.");
+            try
+            {
+                if (await extractor.ValidateToolsAsync(stoppingToken)) logger.LogInformation("Audio download tools passed startup validation (yt-dlp and FFmpeg).");
+                else logger.LogWarning("Audio downloads are enabled but yt-dlp or FFmpeg failed startup validation.");
+            }
+            catch (Exception error) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogWarning("Audio tools startup validation failed with {ErrorType}.", error.GetType().Name);
+            }
         }
         var nextCleanup = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
@@ -176,7 +185,7 @@ public sealed class ApiDownloadBackgroundRunner(IServiceScopeFactory scopes,ICon
                     await imports.PurgeExpiredAsync(stoppingToken);
                     nextCleanup = now.AddMinutes(5);
                 }
-                if (runDownloads && await scope.ServiceProvider.GetRequiredService<AudioDownloadProcessor>().ProcessOneAsync(stoppingToken)) continue;
+                if (runDownloads && await scope.ServiceProvider.GetRequiredService<AudioDownloadQueueRunner>().ProcessAvailableAsync(stoppingToken)) continue;
                 if (imports is not null && await imports.ProcessOneAsync(stoppingToken)) continue;
                 await Task.Delay(TimeSpan.FromSeconds(1),stoppingToken);
             }

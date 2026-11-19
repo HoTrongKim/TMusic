@@ -9,6 +9,7 @@ public sealed record StoredFileEntry(Guid UserId, string FileName, long SizeByte
 public interface IAudioStorage
 {
     string StorageRootPath { get; }
+    bool IsObjectStorage { get; }
     bool IsValidMp3Header(ReadOnlySpan<byte> header);
     Task<StoredAudio> SaveFromTempFileAsync(Guid userId, string tempFilePath, CancellationToken ct);
     Task<StoredAudio> SaveBytesAsync(Guid userId, ReadOnlyMemory<byte> mp3Bytes, CancellationToken ct);
@@ -34,8 +35,10 @@ public sealed partial class AudioStorage(IConfiguration config) : IAudioStorage
             "audio");
 
     public string StorageRootPath => RootPath;
+    public bool IsObjectStorage => false;
+    public bool IsValidMp3Header(ReadOnlySpan<byte> header) => IsValidMp3HeaderBytes(header);
 
-    public bool IsValidMp3Header(ReadOnlySpan<byte> header)
+    public static bool IsValidMp3HeaderBytes(ReadOnlySpan<byte> header)
     {
         if (header.Length < 4) return false;
         // ID3v2 tag ("ID3")
@@ -54,7 +57,7 @@ public sealed partial class AudioStorage(IConfiguration config) : IAudioStorage
         await using (var fs = new FileStream(tempFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true))
         {
             var read = await fs.ReadAsync(header.AsMemory(0, header.Length), ct);
-            if (!IsValidMp3Header(header.AsSpan(0, read)))
+            if (!IsValidMp3HeaderBytes(header.AsSpan(0, read)))
                 throw new AudioStorageException("AUDIO_FORMAT_INVALID", "Định dạng âm thanh không phải MP3 hợp lệ.");
         }
 
@@ -176,4 +179,5 @@ public sealed class AudioStorageException(string code, string detail) : Exceptio
 {
     public string Code { get; } = code;
     public string Detail { get; } = detail;
+    public bool Retryable { get; init; }
 }

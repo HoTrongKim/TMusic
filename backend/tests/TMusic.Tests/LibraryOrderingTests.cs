@@ -43,7 +43,7 @@ public sealed class LibraryOrderingTests(SqlApiFixture fixture)
         Assert.Equal(2,await db.Albums.CountAsync(x=>x.OwnerId==account.UserId));
     }
     [SqlFact]
-    public async Task PrivateOriginalUrlDoesNotLeakAcrossUsersAndMixedCollectionGateIsEnforced()
+    public async Task PrivateOriginalUrlDoesNotLeakAndAlbumsAcceptMixedProviders()
     {
         var alice=await fixture.RegisterAsync(); var bob=await fixture.RegisterAsync();
         using var a=fixture.Client(alice.AccessToken); using var b=fixture.Client(bob.AccessToken);
@@ -52,7 +52,11 @@ public sealed class LibraryOrderingTests(SqlApiFixture fixture)
         Assert.DoesNotContain("alice-private",other.GetProperty("originalUrl").GetString());
         var album=await Json(await a.PostAsJsonAsync("/api/v1/albums",new {name="YouTube riêng"})); var id=album.GetProperty("id").GetGuid();
         await Json(await a.PostAsJsonAsync("/api/v1/library/songs",new {url="https://youtu.be/Ordering005",customTitle="YouTube",albumIds=new[]{id}}));
-        await Expect(await a.PostAsJsonAsync("/api/v1/library/songs",new {url="https://www.tiktok.com/@tester/video/1234567890123456789",customTitle="TikTok",albumIds=new[]{id}}),HttpStatusCode.Conflict);
-        var list=await Json(await a.GetAsync("/api/v1/library/songs?provider=tiktok")); Assert.Equal(0,list.GetProperty("total").GetInt32());
+        var tiktok=await Json(await a.PostAsJsonAsync("/api/v1/library/songs",new {url="https://www.tiktok.com/@tester/video/1234567890123456789",customTitle="TikTok",albumIds=new[]{id}}));
+        Assert.Equal("tiktok",tiktok.GetProperty("provider").GetString());
+        Assert.Equal(id,tiktok.GetProperty("albumIds")[0].GetGuid());
+        var albumSongs=await Json(await a.GetAsync($"/api/v1/albums/{id}/songs"));
+        Assert.Equal(new[]{"youtube","tiktok"},albumSongs.GetProperty("items").EnumerateArray().Select(song=>song.GetProperty("provider").GetString()).ToArray());
+        var list=await Json(await a.GetAsync("/api/v1/library/songs?provider=tiktok")); Assert.Equal(1,list.GetProperty("total").GetInt32());
     }
 }

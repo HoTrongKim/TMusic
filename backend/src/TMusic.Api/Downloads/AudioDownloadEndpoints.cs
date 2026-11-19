@@ -249,7 +249,8 @@ public static class AudioDownloadEndpoints
             .FirstOrDefaultAsync(x => x.Id == job.UserLibrarySongId && x.UserId == user, ct);
         if (song is null) return Results.NotFound();
 
-        if (job.Status == ImportStatus.Failed && !YtDlpAudioExtractor.IsRetryableErrorCode(job.ErrorCode))
+        if (job.Status == ImportStatus.Failed && (!job.RightsConfirmed ||
+            !YtDlpAudioExtractor.IsRetryableErrorCode(job.ErrorCode)))
             return ApiSupport.Problem(job.ErrorCode ?? "DOWNLOAD_NOT_RETRYABLE", 422);
 
         if (job.Status is ImportStatus.Failed or ImportStatus.Canceled)

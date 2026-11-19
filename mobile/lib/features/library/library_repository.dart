@@ -80,6 +80,14 @@ class LibraryRepository {
       final importedTracks = (await guestAudio.list())
           .where((track) => !track.id.startsWith('song:'))
           .toList();
+      final guestImportedTrackAlbumIds = <String, List<String>>{};
+      for (final album in guestAlbums) {
+        final tracks = await guestAudio.listAlbumTracks(album.id);
+        guestImportedTrackAlbumIds[album.id] = tracks
+            .where((track) => !track.id.startsWith('song:'))
+            .map((track) => track.id)
+            .toList();
+      }
       if (guestAlbums.isEmpty && guestSongs.isEmpty && importedTracks.isEmpty) {
         return false;
       }
@@ -153,6 +161,18 @@ class LibraryRepository {
         if (currentUserId() != userId) return false;
         userAudio ??= await openLocalLibrary(userId);
         await userAudio.copyImportedTrack(track);
+      }
+      if (importedTracks.isNotEmpty) {
+        userAudio ??= await openLocalLibrary(userId);
+        for (final album in guestAlbums) {
+          final targetId = albumIdMap[album.id];
+          if (targetId == null) continue;
+          for (final trackId
+              in guestImportedTrackAlbumIds[album.id] ?? const []) {
+            if (currentUserId() != userId) return false;
+            await userAudio.addTrackToAlbum(trackId, targetId);
+          }
+        }
       }
       if (currentUserId() != userId) return false;
       if (!await guestStore.clearAfterSync(revision)) return false;
@@ -231,6 +251,9 @@ class LibraryRepository {
         albumId: albumId,
         sort: sort,
       );
+    }
+    if (provider == 'local' && albumId != null) {
+      return PageResult(const [], 0, page, 30);
     }
     final cacheKey =
         'songs:${albumId ?? "lib"}:$page:$sort:${provider ?? "all"}:${favorite ?? "all"}:${unorganized ?? "all"}:${query.trim()}';
@@ -608,6 +631,7 @@ class LibraryRepository {
         : song.audioStatus,
     progressPercent: song.audioReady ? 100 : 0,
     audioReady: song.audioReady,
+    errorCode: song.audioStatus == 'FAILED' ? 'AUDIO_EXTRACTION_FAILED' : null,
   );
 
   String _guestJobSongId(String jobId) {

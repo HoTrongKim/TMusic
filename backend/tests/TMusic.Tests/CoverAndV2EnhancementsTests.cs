@@ -191,6 +191,68 @@ public sealed class CoverAndV2EnhancementsTests(SqlApiFixture fixture)
     }
 
     [SqlFact]
+    public async Task MixedSourceAlbumAcceptsEveryProviderThroughCreateAndAddRoutesAndPreservesShareImport()
+    {
+        var owner = await fixture.RegisterAsync();
+        var recipient = await fixture.RegisterAsync();
+        using var ownerClient = fixture.Client(owner.AccessToken);
+        using var recipientClient = fixture.Client(recipient.AccessToken);
+
+        var album = await Json(await ownerClient.PostAsJsonAsync("/api/v1/albums", new { name = "Album đa nguồn" }));
+        var albumId = album.GetProperty("id").GetGuid();
+
+        var youtube = await Json(await ownerClient.PostAsJsonAsync("/api/v1/library/songs", new
+        {
+            url = "https://youtu.be/MixSource01",
+            customTitle = "YouTube track",
+            albumIds = new[] { albumId }
+        }));
+        Assert.Equal("youtube", youtube.GetProperty("provider").GetString());
+
+        var tiktok = await Json(await ownerClient.PostAsJsonAsync("/api/v1/library/songs", new
+        {
+            url = "https://www.tiktok.com/@artist/video/7123456789012345678",
+            customTitle = "TikTok track"
+        }));
+        Assert.Equal("tiktok", tiktok.GetProperty("provider").GetString());
+
+        var currentAlbum = await Json(await ownerClient.GetAsync($"/api/v1/albums/{albumId}"));
+        await Expect(await Mutation(ownerClient, HttpMethod.Post, $"/api/v1/albums/{albumId}/songs",
+            new { userLibrarySongId = tiktok.GetProperty("id").GetGuid() },
+            currentAlbum.GetProperty("version").GetString()), HttpStatusCode.NoContent);
+
+        var soundCloud = await Json(await ownerClient.PostAsJsonAsync("/api/v1/library/songs", new
+        {
+            url = "https://soundcloud.com/indie-producer/mixed-track",
+            customTitle = "SoundCloud track",
+            albumIds = new[] { albumId }
+        }));
+        Assert.Equal("soundcloud", soundCloud.GetProperty("provider").GetString());
+
+        var albumSongs = await Json(await ownerClient.GetAsync($"/api/v1/albums/{albumId}/songs"));
+        Assert.Equal(3, albumSongs.GetProperty("total").GetInt32());
+        Assert.Equal(new[] { "youtube", "tiktok", "soundcloud" },
+            albumSongs.GetProperty("items").EnumerateArray()
+                .Select(song => song.GetProperty("provider").GetString()).ToArray());
+
+        var tiktokOnly = await Json(await ownerClient.GetAsync($"/api/v1/albums/{albumId}/songs?provider=tiktok"));
+        Assert.Equal(1, tiktokOnly.GetProperty("total").GetInt32());
+        Assert.Equal("tiktok", tiktokOnly.GetProperty("items")[0].GetProperty("provider").GetString());
+        await Expect(await ownerClient.GetAsync($"/api/v1/albums/{albumId}/songs?provider=unknown"), HttpStatusCode.BadRequest);
+
+        var capabilities = await Json(await ownerClient.GetAsync("/api/v1/system/capabilities"));
+        Assert.True(capabilities.GetProperty("crossProviderMixedCollections").GetBoolean());
+
+        var share = await Json(await ownerClient.PostAsync($"/api/v1/albums/{albumId}/share", null));
+        var shareCode = share.GetProperty("shareCode").GetString()!;
+        var imported = await Json(await recipientClient.PostAsync($"/api/v1/shared-albums/{shareCode}/import", null));
+        var importedSongs = await Json(await recipientClient.GetAsync($"/api/v1/albums/{imported.GetProperty("id").GetGuid()}/songs"));
+        Assert.Equal(new[] { "youtube", "tiktok", "soundcloud" },
+            importedSongs.GetProperty("items").EnumerateArray()
+                .Select(song => song.GetProperty("provider").GetString()).ToArray());
+    }
+
+    [SqlFact]
     public async Task SoundCloudLinksGuestPreviewAndRevocableAlbumSharingBetweenUsersWorkEndToEnd()
     {
         var alice = await fixture.RegisterAsync();

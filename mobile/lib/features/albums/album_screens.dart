@@ -307,11 +307,13 @@ class AlbumDetailScreen extends ConsumerStatefulWidget {
 class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   Album? _album;
   List<Song> _songs = [];
+  List<LocalTrack> _localFileTracks = [];
   Set<String> _localSongIds = {};
   final Set<String> _selectedSongIds = {};
   LocalAudio? _player;
   Object? _error;
   bool _busy = true, _more = false;
+  String? _sourceFilter;
   int _page = 1;
   int _loadRequest = 0;
 
@@ -384,6 +386,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   Future<void> _playAlbumMp3(
     Album a, {
     String? startSongId,
+    String? startLocalTrackId,
     bool shuffle = false,
   }) async {
     setState(() {
@@ -400,7 +403,11 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
       var more = _more;
       while (more) {
         try {
-          final next = await repo.songs(albumId: a.id, page: ++page);
+          final next = await repo.songs(
+            albumId: a.id,
+            page: ++page,
+            provider: _sourceFilter,
+          );
           if (!mounted) return;
           songs.addAll(next.items);
           more = next.hasMore;
@@ -423,6 +430,10 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
           if (song.id == startSongId) startIndex = tracks.length;
           tracks.add(resolved);
         }
+      }
+      for (final track in _visibleLocalTracks) {
+        if (track.id == startLocalTrackId) startIndex = tracks.length;
+        tracks.add(track);
       }
       if (tracks.isEmpty) {
         if (mounted) {
@@ -463,11 +474,17 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     try {
       final repo = ref.read(libraryRepositoryProvider);
       final a = await repo.album(widget.id);
-      final page = await repo.songs(albumId: widget.id, page: requestedPage);
+      final page = await repo.songs(
+        albumId: widget.id,
+        page: requestedPage,
+        provider: _sourceFilter,
+      );
       if (!mounted || request != _loadRequest) return;
       final localIds = <String>{};
+      var localTracks = const <LocalTrack>[];
       try {
         final local = await ref.read(localLibraryProvider.future);
+        localTracks = await local.listAlbumTracks(widget.id);
         for (final song in page.items) {
           if (await local.hasDownloadedSong(song.id)) localIds.add(song.id);
         }
@@ -475,6 +492,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
       if (mounted && request == _loadRequest) {
         setState(() {
           _album = a;
+          _localFileTracks = localTracks;
           _localSongIds = append ? {..._localSongIds, ...localIds} : localIds;
           _songs = append ? [..._songs, ...page.items] : page.items;
           _more = page.hasMore;
@@ -488,9 +506,23 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     }
   }
 
+  void _filterBySource(String? provider) {
+    if (_sourceFilter == provider) return;
+    setState(() {
+      _sourceFilter = provider;
+      _selectedSongIds.clear();
+    });
+    _load();
+  }
+
   bool _canPlay(Song song) =>
       _localSongIds.contains(song.id) ||
       (!song.isGuestLocal && song.audioReady);
+
+  List<LocalTrack> get _visibleLocalTracks =>
+      _sourceFilter == null || _sourceFilter == 'local'
+      ? _localFileTracks
+      : const <LocalTrack>[];
 
   Future<void> _mutate(Future<void> Function() action) async {
     setState(() => _busy = true);
@@ -511,6 +543,24 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     ids.insert(index + direction, moved);
     await _mutate(
       () => ref.read(libraryRepositoryProvider).order(_album!, ids),
+    );
+  }
+
+  Future<void> _removeLocalTrack(LocalTrack track) async {
+    await _mutate(() async {
+      await (await ref.read(localLibraryProvider.future))
+          .removeTrackFromAlbum(track.id, widget.id);
+    });
+  }
+
+  Future<void> _moveLocalTrack(int index, int direction) async {
+    final ids = _localFileTracks.map((track) => track.id).toList();
+    final moved = ids.removeAt(index);
+    ids.insert(index + direction, moved);
+    await _mutate(
+      () => ref
+          .read(localLibraryProvider.future)
+          .then((local) => local.reorderAlbumTracks(widget.id, ids)),
     );
   }
 
@@ -538,7 +588,8 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
         (a != null && activeGlobal?.mediaItem.value?.album == a.name
             ? activeGlobal
             : null);
-    final hasPlayableMp3 = _more || _songs.any(_canPlay);
+    final hasPlayableMp3 =
+        _more || _songs.any(_canPlay) || _visibleLocalTracks.isNotEmpty;
     final ambient = albumAmbientColor(
       a?.coverImageUrl ?? a?.id,
       isDark: scheme.brightness == Brightness.dark,
@@ -546,413 +597,552 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
 
     return SwipeActionGroup(
       child: Scaffold(
-      appBar: _selecting && a != null
-          ? AppBar(
-              leading: IconButton(
-                tooltip: context.tr('cancel'),
-                onPressed: () => setState(() => _selectedSongIds.clear()),
-                icon: const Icon(Icons.close_rounded),
-              ),
-              title: Text(
-                context
-                    .tr('multiSelectCount')
-                    .replaceAll('{count}', '${_selectedSongIds.length}'),
-              ),
-              actions: [
-                IconButton(
-                  tooltip: context.tr('favoriteAdd'),
-                  onPressed: _busy ? null : _batchFavoriteSongs,
-                  icon: const Icon(Icons.favorite_outline_rounded),
+        appBar: _selecting && a != null
+            ? AppBar(
+                leading: IconButton(
+                  tooltip: context.tr('cancel'),
+                  onPressed: () => setState(() => _selectedSongIds.clear()),
+                  icon: const Icon(Icons.close_rounded),
                 ),
-                IconButton(
-                  tooltip: context.tr('addToAlbum'),
-                  onPressed: _busy ? null : _batchAddToOtherAlbums,
-                  icon: const Icon(Icons.playlist_add_rounded),
+                title: Text(
+                  context
+                      .tr('multiSelectCount')
+                      .replaceAll('{count}', '${_selectedSongIds.length}'),
                 ),
-                IconButton(
-                  tooltip: context.tr('swipeRemoveFromAlbum'),
-                  onPressed: _busy ? null : () => _batchRemoveFromAlbum(a),
-                  icon: Icon(
-                    Icons.remove_circle_outline_rounded,
-                    color: scheme.error,
-                  ),
-                ),
-              ],
-            )
-          : AppBar(
-              title: Text(a?.name ?? context.tr('albums')),
-              actions: [
-                if (a != null) ...[
+                actions: [
                   IconButton(
-                    tooltip: context.tr('editAlbum'),
-                    onPressed: () => context.push('/albums/${a.id}/edit'),
-                    icon: const Icon(Icons.edit_outlined),
+                    tooltip: context.tr('favoriteAdd'),
+                    onPressed: _busy ? null : _batchFavoriteSongs,
+                    icon: const Icon(Icons.favorite_outline_rounded),
                   ),
                   IconButton(
-                    tooltip: context.tr('delete'),
-                    onPressed: _busy
-                        ? null
-                        : () async {
-                            final body = a.songCount > 0
-                                ? context
-                                      .tr('albumDeleteImpact')
-                                      .replaceAll('{count}', '${a.songCount}')
-                                : context.tr('albumDeleteBody');
-                            if (!await confirmAction(
-                              context,
-                              context.tr('albumDeleteTitle'),
-                              body,
-                            )) {
-                              return;
-                            }
-                            try {
-                              await ref
-                                  .read(libraryRepositoryProvider)
-                                  .deleteAlbum(a);
-                              ref
-                                  .read(libraryRevisionProvider.notifier)
-                                  .changed();
-                              if (context.mounted) context.pop();
-                            } catch (e) {
-                              if (mounted) setState(() => _error = e);
-                            }
-                          },
-                    icon: const Icon(Icons.delete_outline_rounded),
+                    tooltip: context.tr('addToAlbum'),
+                    onPressed: _busy ? null : _batchAddToOtherAlbums,
+                    icon: const Icon(Icons.playlist_add_rounded),
+                  ),
+                  IconButton(
+                    tooltip: context.tr('swipeRemoveFromAlbum'),
+                    onPressed: _busy ? null : () => _batchRemoveFromAlbum(a),
+                    icon: Icon(
+                      Icons.remove_circle_outline_rounded,
+                      color: scheme.error,
+                    ),
                   ),
                 ],
-              ],
-            ),
-      bottomNavigationBar: inlinePlayer == null
-          ? const SafeArea(top: false, child: MiniPlayerDock())
-          : null,
-      body: Builder(
-        builder: (bodyCtx) => NotificationListener<ScrollStartNotification>(
-          onNotification: (_) {
-            SwipeActionGroup.closeAll(bodyCtx);
-            return false;
-          },
-          child: RefreshIndicator(
-            onRefresh: _load,
-            child: CustomScrollView(
-          slivers: [
-            SliverToBoxAdapter(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [ambient, scheme.surfaceContainerLowest],
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const OfflineBanner(),
-                      if (_busy) const LinearProgressIndicator(),
-                      if (_error != null) ...[
-                        Notice(errorText(context, _error!), error: true),
-                        OutlinedButton(
-                          onPressed: _load,
-                          child: Text(context.tr('retry')),
-                        ),
-                      ],
-                      if (a != null) ...[
-                        Center(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(8),
-                              boxShadow: tokens?.heroShadow,
-                            ),
-                            child: Cover(
-                              url: a.coverImageUrl,
-                              size: 196,
-                              radius: 8,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          a.name,
-                          style: Theme.of(context).textTheme.headlineLarge
-                              ?.copyWith(fontWeight: FontWeight.w800),
-                        ),
-                        if (a.description?.isNotEmpty == true) ...[
-                          const SizedBox(height: 6),
-                          Text(a.description!),
-                        ],
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 6,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Text(
-                              '${a.songCount} ${context.tr('songs').toLowerCase()}',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            if (a.isGuestLocal)
-                              Chip(
-                                avatar: const Icon(Icons.phone_android_rounded),
-                                label: Text(context.tr('savedOnDevice')),
-                                visualDensity: VisualDensity.compact,
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          alignment: WrapAlignment.spaceBetween,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                IconButton(
-                                  tooltip: context.tr(
-                                    a.isFavorite
-                                        ? 'favoriteRemove'
-                                        : 'favoriteAdd',
-                                  ),
-                                  onPressed: _busy
-                                      ? null
-                                      : () => _mutate(() async {
-                                          await ref
-                                              .read(libraryRepositoryProvider)
-                                              .saveAlbum(
-                                                existing: a,
-                                                name: a.name,
-                                                description:
-                                                    a.description ?? '',
-                                                cover: a.coverImageUrl,
-                                                favorite: !a.isFavorite,
-                                              );
-                                        }),
-                                  icon: Icon(
-                                    a.isFavorite
-                                        ? Icons.favorite_rounded
-                                        : Icons.favorite_border_rounded,
-                                    color: a.isFavorite
-                                        ? const Color(0xFFE05263)
-                                        : null,
-                                  ),
-                                ),
-                                IconButton(
-                                  tooltip: context.tr('quickAdd'),
-                                  onPressed: () {
-                                    ref
-                                        .read(linkDraftProvider.notifier)
-                                        .update(albumId: a.id);
-                                    context.go('/?album=${a.id}');
-                                  },
-                                  icon: const Icon(Icons.add_link_rounded),
-                                ),
-                                IconButton(
-                                  key: const Key('album-share'),
-                                  tooltip: context.tr('shareAlbum'),
-                                  onPressed: () =>
-                                      openShareAlbumSheet(context, a),
-                                  icon: const Icon(Icons.ios_share_rounded),
-                                ),
-                                IconButton(
-                                  tooltip: context.tr('addExistingSong'),
-                                  onPressed: _busy
-                                      ? null
-                                      : () => _pickExistingSong(a),
-                                  icon: const Icon(Icons.playlist_add_rounded),
-                                ),
-                              ],
-                            ),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  tooltip: context.tr('shuffle'),
-                                  onPressed: _busy || !hasPlayableMp3
-                                      ? null
-                                      : () => _playAlbumMp3(a, shuffle: true),
-                                  icon: const Icon(Icons.shuffle_rounded),
-                                ),
-                                Tooltip(
-                                  message: context.tr('playAlbumMp3'),
-                                  child: SizedBox.square(
-                                    dimension: 56,
-                                    child: FilledButton(
-                                      key: const Key('album-play-mp3'),
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor:
-                                            TMusicTheme.spotifyGreen,
-                                        foregroundColor: Colors.black,
-                                        shape: const CircleBorder(),
-                                        padding: EdgeInsets.zero,
-                                      ),
-                                      onPressed: _busy || !hasPlayableMp3
-                                          ? null
-                                          : () => _playAlbumMp3(a),
-                                      child: const Icon(
-                                        Icons.play_arrow_rounded,
-                                        size: 34,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        if (inlinePlayer != null) ...[
-                          const SizedBox(height: 14),
-                          LocalPlayerControls(inlinePlayer),
-                        ],
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            if (a != null && !_busy && _songs.isEmpty)
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                sliver: SliverToBoxAdapter(
-                  child: EmptyView(
-                    icon: Icons.music_note_rounded,
-                    title: context.tr('emptyLibrary'),
-                    body: context.tr('emptyLibraryBody'),
-                  ),
-                ),
               )
-            else if (_songs.isNotEmpty)
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                sliver: SliverToBoxAdapter(
-                  child: Material(
-                    color: scheme.surface,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      side: BorderSide(
-                        color: scheme.outlineVariant.withValues(alpha: 0.6),
-                      ),
+            : AppBar(
+                title: Text(a?.name ?? context.tr('albums')),
+                actions: [
+                  if (a != null) ...[
+                    IconButton(
+                      tooltip: context.tr('editAlbum'),
+                      onPressed: () => context.push('/albums/${a.id}/edit'),
+                      icon: const Icon(Icons.edit_outlined),
                     ),
-                    clipBehavior: Clip.antiAlias,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 8,
+                    IconButton(
+                      tooltip: context.tr('delete'),
+                      onPressed: _busy
+                          ? null
+                          : () async {
+                              final body = a.songCount > 0
+                                  ? context
+                                        .tr('albumDeleteImpact')
+                                        .replaceAll('{count}', '${a.songCount}')
+                                  : context.tr('albumDeleteBody');
+                              if (!await confirmAction(
+                                context,
+                                context.tr('albumDeleteTitle'),
+                                body,
+                              )) {
+                                return;
+                              }
+                              try {
+                                await ref
+                                    .read(libraryRepositoryProvider)
+                                    .deleteAlbum(a);
+                                await (await ref.read(
+                                  localLibraryProvider.future,
+                                )).removeAlbumTracks(a.id);
+                                ref
+                                    .read(libraryRevisionProvider.notifier)
+                                    .changed();
+                                if (context.mounted) context.pop();
+                              } catch (e) {
+                                if (mounted) setState(() => _error = e);
+                              }
+                            },
+                      icon: const Icon(Icons.delete_outline_rounded),
+                    ),
+                  ],
+                ],
+              ),
+        bottomNavigationBar: inlinePlayer == null
+            ? const SafeArea(top: false, child: MiniPlayerDock())
+            : null,
+        body: Builder(
+          builder: (bodyCtx) => NotificationListener<ScrollStartNotification>(
+            onNotification: (_) {
+              SwipeActionGroup.closeAll(bodyCtx);
+              return false;
+            },
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [ambient, scheme.surfaceContainerLowest],
+                        ),
                       ),
-                      child: Column(
-                        children: [
-                          for (final (index, song) in _songs.indexed)
-                            SongTile(
-                              song,
-                              trackNumber: index + 1,
-                              isDownloaded: _localSongIds.contains(song.id),
-                              albumContext: a,
-                              selectable: _selecting,
-                              selected: _selectedSongIds.contains(song.id),
-                              onToggleSelect: () => _toggleSelectSong(song.id),
-                              onLongPress: () => _toggleSelectSong(song.id),
-                              onOptimisticFavorite: _replaceSongInList,
-                              onRollbackFavorite: _replaceSongInList,
-                              onChanged: _load,
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const OfflineBanner(),
+                            if (_busy) const LinearProgressIndicator(),
+                            if (_error != null) ...[
+                              Notice(errorText(context, _error!), error: true),
+                              OutlinedButton(
+                                onPressed: _load,
+                                child: Text(context.tr('retry')),
+                              ),
+                            ],
+                            if (a != null) ...[
+                              Center(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    boxShadow: tokens?.heroShadow,
+                                  ),
+                                  child: Cover(
+                                    url: a.coverImageUrl,
+                                    size: 196,
+                                    radius: 8,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              Text(
+                                a.name,
+                                style: Theme.of(context).textTheme.headlineLarge
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                              if (a.description?.isNotEmpty == true) ...[
+                                const SizedBox(height: 6),
+                                Text(a.description!),
+                              ],
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 6,
+                                crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
-                                  if (_canPlay(song))
-                                    IconButton(
+                                  Text(
+                                    '${a.songCount + _localFileTracks.length} ${context.tr('songs').toLowerCase()}',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall,
+                                  ),
+                                  if (a.isGuestLocal)
+                                    Chip(
+                                      avatar: const Icon(
+                                        Icons.phone_android_rounded,
+                                      ),
+                                      label: Text(context.tr('savedOnDevice')),
                                       visualDensity: VisualDensity.compact,
-                                      tooltip: context.tr('play'),
-                                      onPressed: _busy || a == null
-                                          ? null
-                                          : () => _playAlbumMp3(
-                                              a,
-                                              startSongId: song.id,
-                                            ),
-                                      icon: Icon(
-                                        Icons.play_circle_fill_rounded,
-                                        color: scheme.primary,
-                                        size: 26,
-                                      ),
                                     ),
-                                  PopupMenuButton<String>(
-                                    tooltip: context.tr('moreActions'),
-                                    onSelected: (value) {
-                                      if (value == 'remove' && a != null) {
-                                        SongActions.removeFromAlbumWithUndo(
-                                          context,
-                                          ref,
-                                          a,
-                                          song,
-                                          onChanged: _load,
-                                        );
-                                      } else if (value == 'more') {
-                                        SongActions.showMoreSheet(
-                                          context,
-                                          ref,
-                                          song,
-                                          albumContext: a,
-                                          canPlay: _canPlay(song),
-                                          onChanged: _load,
-                                          onOptimisticFavorite:
-                                              _replaceSongInList,
-                                          onRollbackFavorite: _replaceSongInList,
-                                        );
-                                      } else {
-                                        _move(index, value == 'up' ? -1 : 1);
-                                      }
-                                    },
-                                    itemBuilder: (context) => [
-                                      PopupMenuItem(
-                                        value: 'more',
-                                        child: Text(context.tr('moreActions')),
-                                      ),
-                                      PopupMenuItem(
-                                        value: 'remove',
-                                        child: Text(
-                                          context.tr('swipeRemoveFromAlbum'),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                alignment: WrapAlignment.spaceBetween,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    children: [
+                                      IconButton(
+                                        tooltip: context.tr(
+                                          a.isFavorite
+                                              ? 'favoriteRemove'
+                                              : 'favoriteAdd',
+                                        ),
+                                        onPressed: _busy
+                                            ? null
+                                            : () => _mutate(() async {
+                                                await ref
+                                                    .read(
+                                                      libraryRepositoryProvider,
+                                                    )
+                                                    .saveAlbum(
+                                                      existing: a,
+                                                      name: a.name,
+                                                      description:
+                                                          a.description ?? '',
+                                                      cover: a.coverImageUrl,
+                                                      favorite: !a.isFavorite,
+                                                    );
+                                              }),
+                                        icon: Icon(
+                                          a.isFavorite
+                                              ? Icons.favorite_rounded
+                                              : Icons.favorite_border_rounded,
+                                          color: a.isFavorite
+                                              ? const Color(0xFFE05263)
+                                              : null,
                                         ),
                                       ),
-                                      if (!_more && index > 0)
-                                        PopupMenuItem(
-                                          value: 'up',
-                                          child: Text(context.tr('moveUp')),
+                                      IconButton(
+                                        tooltip: context.tr('quickAdd'),
+                                        onPressed: () {
+                                          ref
+                                              .read(linkDraftProvider.notifier)
+                                              .update(albumId: a.id);
+                                          context.go('/?album=${a.id}');
+                                        },
+                                        icon: const Icon(
+                                          Icons.add_link_rounded,
                                         ),
-                                      if (!_more && index < _songs.length - 1)
-                                        PopupMenuItem(
-                                          value: 'down',
-                                          child: Text(context.tr('moveDown')),
+                                      ),
+                                      IconButton(
+                                        key: const Key('album-share'),
+                                        tooltip: context.tr('shareAlbum'),
+                                        onPressed: () =>
+                                            openShareAlbumSheet(context, a),
+                                        icon: const Icon(
+                                          Icons.ios_share_rounded,
                                         ),
+                                      ),
+                                      IconButton(
+                                        tooltip: context.tr('addExistingSong'),
+                                        onPressed: _busy
+                                            ? null
+                                            : () => _pickExistingSong(a),
+                                        icon: const Icon(
+                                          Icons.playlist_add_rounded,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        tooltip: context.tr('shuffle'),
+                                        onPressed: _busy || !hasPlayableMp3
+                                            ? null
+                                            : () => _playAlbumMp3(
+                                                a,
+                                                shuffle: true,
+                                              ),
+                                        icon: const Icon(Icons.shuffle_rounded),
+                                      ),
+                                      Tooltip(
+                                        message: context.tr('playAlbumMp3'),
+                                        child: SizedBox.square(
+                                          dimension: 56,
+                                          child: FilledButton(
+                                            key: const Key('album-play-mp3'),
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor:
+                                                  TMusicTheme.spotifyGreen,
+                                              foregroundColor: Colors.black,
+                                              shape: const CircleBorder(),
+                                              padding: EdgeInsets.zero,
+                                            ),
+                                            onPressed: _busy || !hasPlayableMp3
+                                                ? null
+                                                : () => _playAlbumMp3(a),
+                                            child: const Icon(
+                                              Icons.play_arrow_rounded,
+                                              size: 34,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                     ],
                                   ),
                                 ],
                               ),
-                            ),
-                        ],
+                              if (inlinePlayer != null) ...[
+                                const SizedBox(height: 14),
+                                LocalPlayerControls(inlinePlayer),
+                              ],
+                              if (a.songCount > 0 ||
+                                  _localFileTracks.isNotEmpty) ...[
+                                const SizedBox(height: 16),
+                                Text(
+                                  context.tr('filterAlbumSources'),
+                                  style: Theme.of(context).textTheme.labelLarge,
+                                ),
+                                const SizedBox(height: 8),
+                                SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: Row(
+                                    children: [
+                                      for (final (provider, label) in const [
+                                        (null, 'allSources'),
+                                        ('youtube', 'youtubeSource'),
+                                        ('tiktok', 'tiktokSource'),
+                                        ('soundcloud', 'soundcloudSource'),
+                                        ('local', 'localAudioSource'),
+                                      ]) ...[
+                                        if (provider != null)
+                                          const SizedBox(width: 8),
+                                        ChoiceChip(
+                                          key: Key(
+                                            'album-source-${provider ?? 'all'}',
+                                          ),
+                                          label: Text(context.tr(label)),
+                                          selected: _sourceFilter == provider,
+                                          onSelected: _busy
+                                              ? null
+                                              : (_) =>
+                                                    _filterBySource(provider),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  if (a != null &&
+                      !_busy &&
+                      _songs.isEmpty &&
+                      _visibleLocalTracks.isEmpty)
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      sliver: SliverToBoxAdapter(
+                        child: EmptyView(
+                          icon: Icons.music_note_rounded,
+                          title: context.tr('emptyLibrary'),
+                          body: context.tr('emptyLibraryBody'),
+                        ),
+                      ),
+                    )
+                  else if (_songs.isNotEmpty || _visibleLocalTracks.isNotEmpty)
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      sliver: SliverToBoxAdapter(
+                        child: Material(
+                          color: scheme.surface,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(22),
+                            side: BorderSide(
+                              color: scheme.outlineVariant.withValues(
+                                alpha: 0.6,
+                              ),
+                            ),
+                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            child: Column(
+                              children: [
+                                for (final (index, song) in _songs.indexed)
+                                  SongTile(
+                                    song,
+                                    trackNumber: index + 1,
+                                    isDownloaded: _localSongIds.contains(
+                                      song.id,
+                                    ),
+                                    albumContext: a,
+                                    selectable: _selecting,
+                                    selected: _selectedSongIds.contains(
+                                      song.id,
+                                    ),
+                                    onToggleSelect: () =>
+                                        _toggleSelectSong(song.id),
+                                    onLongPress: () =>
+                                        _toggleSelectSong(song.id),
+                                    onOptimisticFavorite: _replaceSongInList,
+                                    onRollbackFavorite: _replaceSongInList,
+                                    onChanged: _load,
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (_canPlay(song))
+                                          IconButton(
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            tooltip: context.tr('play'),
+                                            onPressed: _busy || a == null
+                                                ? null
+                                                : () => _playAlbumMp3(
+                                                    a,
+                                                    startSongId: song.id,
+                                                  ),
+                                            icon: Icon(
+                                              Icons.play_circle_fill_rounded,
+                                              color: scheme.primary,
+                                              size: 26,
+                                            ),
+                                          ),
+                                        PopupMenuButton<String>(
+                                          tooltip: context.tr('moreActions'),
+                                          onSelected: (value) {
+                                            if (value == 'remove' &&
+                                                a != null) {
+                                              SongActions.removeFromAlbumWithUndo(
+                                                context,
+                                                ref,
+                                                a,
+                                                song,
+                                                onChanged: _load,
+                                              );
+                                            } else if (value == 'more') {
+                                              SongActions.showMoreSheet(
+                                                context,
+                                                ref,
+                                                song,
+                                                albumContext: a,
+                                                canPlay: _canPlay(song),
+                                                onChanged: _load,
+                                                onOptimisticFavorite:
+                                                    _replaceSongInList,
+                                                onRollbackFavorite:
+                                                    _replaceSongInList,
+                                              );
+                                            } else {
+                                              _move(
+                                                index,
+                                                value == 'up' ? -1 : 1,
+                                              );
+                                            }
+                                          },
+                                          itemBuilder: (context) => [
+                                            PopupMenuItem(
+                                              value: 'more',
+                                              child: Text(
+                                                context.tr('moreActions'),
+                                              ),
+                                            ),
+                                            PopupMenuItem(
+                                              value: 'remove',
+                                              child: Text(
+                                                context.tr(
+                                                  'swipeRemoveFromAlbum',
+                                                ),
+                                              ),
+                                            ),
+                                            if (_sourceFilter == null &&
+                                                !_more &&
+                                                index > 0)
+                                              PopupMenuItem(
+                                                value: 'up',
+                                                child: Text(
+                                                  context.tr('moveUp'),
+                                                ),
+                                              ),
+                                            if (_sourceFilter == null &&
+                                                !_more &&
+                                                index < _songs.length - 1)
+                                              PopupMenuItem(
+                                                value: 'down',
+                                                child: Text(
+                                                  context.tr('moveDown'),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                for (final (index, track)
+                                    in _visibleLocalTracks.indexed)
+                                  ListTile(
+                                    key: Key('album-local-track-${track.id}'),
+                                    leading: const Icon(
+                                      Icons.audio_file_rounded,
+                                    ),
+                                    title: Text(
+                                      track.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(
+                                      context.tr('localAudioSource'),
+                                    ),
+                                    onTap: _busy || a == null
+                                        ? null
+                                        : () => _playAlbumMp3(
+                                            a,
+                                            startLocalTrackId: track.id,
+                                          ),
+                                    trailing: PopupMenuButton<String>(
+                                      tooltip: context.tr('moreActions'),
+                                      onSelected: (action) {
+                                        if (action == 'remove') {
+                                          _removeLocalTrack(track);
+                                        } else {
+                                          _moveLocalTrack(
+                                            index,
+                                            action == 'up' ? -1 : 1,
+                                          );
+                                        }
+                                      },
+                                      itemBuilder: (context) => [
+                                        if (index > 0)
+                                          PopupMenuItem(
+                                            value: 'up',
+                                            child: Text(context.tr('moveUp')),
+                                          ),
+                                        if (index <
+                                            _visibleLocalTracks.length - 1)
+                                          PopupMenuItem(
+                                            value: 'down',
+                                            child: Text(context.tr('moveDown')),
+                                          ),
+                                        PopupMenuItem(
+                                          value: 'remove',
+                                          child: Text(
+                                            context.tr('swipeRemoveFromAlbum'),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_more)
+                    SliverPadding(
+                      padding: const EdgeInsets.all(20),
+                      sliver: SliverToBoxAdapter(
+                        child: OutlinedButton(
+                          onPressed: _busy ? null : () => _load(append: true),
+                          child: Text(context.tr('more')),
+                        ),
+                      ),
+                    ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 36)),
+                ],
               ),
-            if (_more)
-              SliverPadding(
-                padding: const EdgeInsets.all(20),
-                sliver: SliverToBoxAdapter(
-                  child: OutlinedButton(
-                    onPressed: _busy ? null : () => _load(append: true),
-                    child: Text(context.tr('more')),
-                  ),
-                ),
-              ),
-            const SliverToBoxAdapter(child: SizedBox(height: 36)),
-          ],
+            ),
+          ),
         ),
       ),
-      ),
-      ),
-    ),
     );
   }
 }

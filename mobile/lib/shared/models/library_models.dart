@@ -1,4 +1,5 @@
 String providerDisplayLabel(String provider) => switch (provider) {
+  'local' => 'Trên thiết bị',
   'soundcloud' => 'SoundCloud',
   'tiktok' => 'TikTok',
   _ => 'YouTube',
@@ -247,18 +248,33 @@ class Song {
 bool isRetryableDownloadError(String? errorCode) =>
     switch (errorCode?.trim().toUpperCase()) {
       'SOURCE_ACCESS_CHECK_REQUIRED' ||
+      'SOURCE_AUTHENTICATION_REQUIRED' ||
+      'SOURCE_ACCESS_FORBIDDEN' ||
       'SOURCE_AUDIO_UNAVAILABLE' ||
       'SOURCE_RESTRICTED_OR_UNSUPPORTED' ||
       'SOURCE_RESPONSE_UNSUPPORTED' ||
       'SOURCE_UNAVAILABLE' ||
       'AUDIO_CONVERSION_FAILED' ||
+      'AUDIO_STORAGE_REJECTED' ||
+      'AUDIO_FILE_INVALID' ||
+      'AUDIO_FORMAT_INVALID' ||
+      'AUDIO_PATH_INVALID' ||
       'AUDIO_INPUT_INVALID' ||
       'AUDIO_ENGINE_UNAVAILABLE' ||
       'RIGHTS_CONFIRMATION_REQUIRED' ||
       'INVALID_SOURCE_URL' ||
       'UNSUPPORTED_SOURCE_URL' ||
       'INVALID_BITRATE' => false,
-      _ => true,
+      'RATE_LIMITED' ||
+      'SOURCE_NETWORK_ERROR' ||
+      'NETWORK_ERROR' ||
+      'AUDIO_STORAGE_UNAVAILABLE' ||
+      'AUDIO_DOWNLOAD_TIMEOUT' ||
+      'AUDIO_DOWNLOAD_BUSY' ||
+      'AUDIO_EXTRACTION_FAILED' ||
+      'TEMPORARY_FAILURE' ||
+      'PROVIDER_TEMPORARILY_UNAVAILABLE' => true,
+      _ => false,
     };
 
 class AudioDownloadJob {
@@ -289,7 +305,8 @@ class AudioDownloadJob {
   bool get isActive => status == 'QUEUED' || status == 'RUNNING';
   bool get isRetryable =>
       status == 'CANCELED' ||
-      (status == 'FAILED' && (retryable ?? isRetryableDownloadError(errorCode)));
+      (status == 'FAILED' &&
+          (retryable ?? isRetryableDownloadError(errorCode)));
   String get providerLabel => providerDisplayLabel(provider);
 
   factory AudioDownloadJob.fromJson(Map<String, dynamic> j) => AudioDownloadJob(

@@ -34,7 +34,8 @@ public static class AudioBitrate
 
 public static class LocalMp3Converter
 {
-    public static async Task ConvertAsync(string ffmpegExecutable, string sourceFile, string outputFile, CancellationToken ct, int? bitrateKbps = null)
+    public static async Task ConvertAsync(string ffmpegExecutable, string sourceFile, string outputFile,
+        CancellationToken ct, int? bitrateKbps = null, TimeSpan? timeout = null)
     {
         if (!AudioBitrate.IsValid(bitrateKbps))
             throw new ProviderException("INVALID_BITRATE");
@@ -60,18 +61,19 @@ public static class LocalMp3Converter
             "-c:a", "libmp3lame", qualityFlag, qualityValue, "-threads", "2",
             "-fs", AudioStorage.MaxAudioBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "-f", "mp3", "-y", outputFile
-        ], Path.GetDirectoryName(sourceFile)!, null, ct);
+        ], Path.GetDirectoryName(sourceFile)!, null, ct, timeout);
         if (result.ExitCode != 0 || !File.Exists(outputFile) || new FileInfo(outputFile).Length is <= 16 or > AudioStorage.MaxAudioBytes)
             throw new ProviderException("AUDIO_CONVERSION_FAILED");
     }
 }
 
-public sealed record AudioProcessResult(int ExitCode, string StandardError);
+public sealed record AudioProcessResult(int ExitCode, string StandardError, string StandardOutput = "");
 
 public static class BoundedAudioProcess
 {
     public static async Task<AudioProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments,
-        string workingDirectory, Func<string, Task>? onOutputLine, CancellationToken ct)
+        string workingDirectory, Func<string, Task>? onOutputLine, CancellationToken ct,
+        TimeSpan? timeout = null, bool captureStandardOutput = false)
     {
         ct.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo
@@ -83,7 +85,7 @@ public static class BoundedAudioProcess
         foreach (var key in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy" })
             start.Environment.Remove(key);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(TimeSpan.FromMinutes(3));
+        deadline.CancelAfter(timeout ?? TimeSpan.FromSeconds(AudioDownloadOptions.DefaultTimeoutSeconds));
         using var process = new Process { StartInfo = start };
         try
         {
@@ -96,12 +98,12 @@ public static class BoundedAudioProcess
             throw new ProviderException("AUDIO_ENGINE_UNAVAILABLE");
         }
         process.StandardInput.Close();
-        var output = ReadAsync(process.StandardOutput, capture: false, onOutputLine, deadline);
+        var output = ReadAsync(process.StandardOutput, capture: captureStandardOutput, onOutputLine, deadline);
         var error = ReadAsync(process.StandardError, capture: true, null, deadline);
         try
         {
             await Task.WhenAll(process.WaitForExitAsync(deadline.Token), output, error);
-            return new AudioProcessResult(process.ExitCode, await error);
+            return new AudioProcessResult(process.ExitCode, await error, await output);
         }
         catch
         {

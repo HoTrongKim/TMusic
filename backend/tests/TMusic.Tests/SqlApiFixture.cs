@@ -62,7 +62,6 @@ public sealed class SqlApiFixture : IAsyncLifetime
                 ["RateLimits:ProviderPermitLimit"] = "1000",
                 ["YouTube:ApiKey"] = "fixture-only",
                 ["Features:EnableTikTokVideoImport"] = "true",
-                ["Features:EnableCrossProviderMixedCollections"] = "false",
                 ["Features:EnableMultiYouTubePlaylistMerge"] = "false",
                 ["Logging:LogLevel:Default"] = "Warning"
             }));

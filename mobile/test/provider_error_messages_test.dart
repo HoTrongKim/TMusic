@@ -15,6 +15,10 @@ void main() {
           'Nhận diện liên kết TikTok hiện chưa sẵn sàng. Vui lòng thử lại sau.',
       'SOUNDCLOUD_IMPORT_DISABLED': 'Nhận diện liên kết SoundCloud hiện chưa sẵn sàng. Vui lòng thử lại sau.',
       'SOURCE_ACCESS_CHECK_REQUIRED': 'Nguồn đang yêu cầu xác minh truy cập. Hãy mở nội dung trong ứng dụng gốc; TMusic chưa thể tải nội dung này.',
+      'SOURCE_AUTHENTICATION_REQUIRED': 'Nguồn yêu cầu đăng nhập hoặc quyền truy cập. TMusic không thể dùng phiên đăng nhập của bạn để tải nội dung này.',
+      'SOURCE_ACCESS_FORBIDDEN': 'Nguồn từ chối yêu cầu tải nội dung này (403). Hãy mở liên kết trong ứng dụng gốc hoặc chọn nguồn được phép tải.',
+      'SOURCE_NETWORK_ERROR': 'Kết nối tới nguồn bị gián đoạn. Hãy kiểm tra mạng rồi thử lại sau.',
+      'SOURCE_RESTRICTED_OR_UNSUPPORTED': 'Nguồn đánh dấu nội dung là riêng tư, có giới hạn hoặc không hỗ trợ tải. TMusic không thể tải nội dung này.',
       'SOURCE_RESPONSE_UNSUPPORTED': 'Chưa đọc được phản hồi từ nguồn. Hãy thử lại sau hoặc mở nội dung trong ứng dụng gốc.',
       'SOURCE_AUDIO_UNAVAILABLE': 'Bài đăng chưa cung cấp âm thanh công khai có thể tải. Bạn vẫn có thể mở nội dung trong ứng dụng gốc.',
       'RATE_LIMITED': 'Có quá nhiều yêu cầu. Vui lòng chờ một lát rồi thử lại.',
@@ -30,6 +34,10 @@ void main() {
       'TIKTOK_IMPORT_DISABLED': 'TikTok link recognition is currently unavailable. Please try again later.',
       'SOUNDCLOUD_IMPORT_DISABLED': 'SoundCloud link recognition is currently unavailable. Please try again later.',
       'SOURCE_ACCESS_CHECK_REQUIRED': 'The source requires an access check. Open the content in the original app; TMusic cannot download it right now.',
+      'SOURCE_AUTHENTICATION_REQUIRED': 'The source requires sign-in or authorization. TMusic cannot use your source account session to download it.',
+      'SOURCE_ACCESS_FORBIDDEN': 'The source denied this download request (403). Open the link in the original app or choose a source that permits downloading.',
+      'SOURCE_NETWORK_ERROR': 'The connection to the source was interrupted. Check your network and try again later.',
+      'SOURCE_RESTRICTED_OR_UNSUPPORTED': 'The source marks this content as private, restricted, or unsupported for download. TMusic cannot download it.',
       'SOURCE_RESPONSE_UNSUPPORTED': 'Could not read the source response. Try again later or open the content in the original app.',
       'SOURCE_AUDIO_UNAVAILABLE': 'This post does not provide publicly downloadable audio. You can still open the content in the original app.',
       'RATE_LIMITED': 'Too many requests. Please wait a moment and try again.',
@@ -114,6 +122,13 @@ void main() {
         downloadFailureText(messageContext, 'SOURCE_ACCESS_CHECK_REQUIRED'),
         locale.value['SOURCE_ACCESS_CHECK_REQUIRED'],
       );
+      for (final code in [
+        'SOURCE_AUTHENTICATION_REQUIRED',
+        'SOURCE_ACCESS_FORBIDDEN',
+        'SOURCE_NETWORK_ERROR',
+      ]) {
+        expect(downloadFailureText(messageContext, code), locale.value[code]);
+      }
       expect(
         downloadFailureText(messageContext, 'source_audio_unavailable'),
         locale.value['SOURCE_AUDIO_UNAVAILABLE'],
@@ -135,6 +150,11 @@ void main() {
             : 'Could not convert the audio stream to MP3. You can open it in the original app or try another source.',
       );
       expect(isRetryableDownloadError('SOURCE_ACCESS_CHECK_REQUIRED'), isFalse);
+      expect(isRetryableDownloadError('SOURCE_AUTHENTICATION_REQUIRED'), isFalse);
+      expect(isRetryableDownloadError('SOURCE_ACCESS_FORBIDDEN'), isFalse);
+      expect(isRetryableDownloadError('SOURCE_NETWORK_ERROR'), isTrue);
+      expect(isRetryableDownloadError('AUDIO_STORAGE_REJECTED'), isFalse);
+      expect(isRetryableDownloadError('UNRECOGNIZED_PERMANENT_ERROR'), isFalse);
       expect(isRetryableDownloadError('SOURCE_AUDIO_UNAVAILABLE'), isFalse);
       expect(isRetryableDownloadError('AUDIO_CONVERSION_FAILED'), isFalse);
       expect(isRetryableDownloadError('RATE_LIMITED'), isTrue);

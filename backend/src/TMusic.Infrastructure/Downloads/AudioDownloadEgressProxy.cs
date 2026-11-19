@@ -20,7 +20,7 @@ public sealed class AudioDownloadEgressProxy : IAsyncDisposable
     private readonly string provider;
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> lookup;
     private readonly TcpListener listener = new(IPAddress.Loopback, 0);
-    private readonly CancellationTokenSource shutdown = new(TimeSpan.FromMinutes(3));
+    private readonly CancellationTokenSource shutdown;
     private readonly SemaphoreSlim concurrent = new(16);
     private readonly ConcurrentBag<Task> connections = [];
     private readonly string credentials = "tmusic:" + Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -28,11 +28,18 @@ public sealed class AudioDownloadEgressProxy : IAsyncDisposable
     private int connectionCount;
     private long transferred;
 
-    public AudioDownloadEgressProxy(string provider, Func<string, CancellationToken, Task<IPAddress[]>>? lookup = null)
+    public AudioDownloadEgressProxy(string provider, Func<string, CancellationToken, Task<IPAddress[]>>? lookup)
+        : this(provider, null, lookup) { }
+
+    public AudioDownloadEgressProxy(
+        string provider,
+        TimeSpan? lifetime = null,
+        Func<string, CancellationToken, Task<IPAddress[]>>? lookup = null)
     {
         if (provider is not ("youtube" or "tiktok" or "soundcloud")) throw new ProviderException("UNSUPPORTED_SOURCE_URL");
         this.provider = provider;
         this.lookup = lookup ?? ((host, ct) => Dns.GetHostAddressesAsync(host, AddressFamily.InterNetwork, ct));
+        shutdown = new CancellationTokenSource(lifetime ?? TimeSpan.FromSeconds(AudioDownloadOptions.DefaultTimeoutSeconds));
         listener.Start(16);
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         ProxyAddress = $"http://{credentials}@127.0.0.1:{port}";

@@ -76,13 +76,9 @@ public static class ImportEndpoints
         if (preview is null) return Results.NotFound();
         if (preview.ExpiresAt <= now) return ApiSupport.Problem("PREVIEW_EXPIRED", 410);
         if (preview.Status != ImportStatus.Ready || preview.Checksum is null) return ApiSupport.Problem("PREVIEW_NOT_READY", 409);
-        if (request.AlbumId is { } albumId)
-        {
-            var album = await db.Albums.AsNoTracking().SingleOrDefaultAsync(x => x.Id == albumId && x.OwnerId == owner, ct);
-            if (album is null) return Results.NotFound();
-            if (album.SourceBoundary is not null && album.SourceBoundary != "youtube:playlist:" + preview.PlaylistId)
-                return ApiSupport.Problem("SOURCE_COMBINATION_DISABLED", 422);
-        }
+        if (request.AlbumId is { } albumId &&
+            !await db.Albums.AsNoTracking().AnyAsync(x => x.Id == albumId && x.OwnerId == owner, ct))
+            return Results.NotFound();
         if (await db.ImportJobs.CountAsync(x => x.OwnerId == owner &&
             (x.Status == ImportStatus.Queued || x.Status == ImportStatus.Running), ct) >= 3)
             return ApiSupport.Problem("TOO_MANY_ACTIVE_IMPORTS", 429);

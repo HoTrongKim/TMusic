@@ -57,6 +57,25 @@ jobs:
             --build-number "$GITHUB_RUN_NUMBER" \
             --dart-define-from-file="$RUNNER_TEMP/tmusic-ios-public-defines.json"
 
+      - name: Kiểm tra khởi động iOS Simulator
+        env:
+          TMUSIC_BUILD_API_URL: ${{ inputs.api_url }}
+          TMUSIC_GOOGLE_SERVER_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_SERVER_CLIENT_ID }}
+          TMUSIC_GOOGLE_IOS_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_IOS_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          flutter build ios --simulator --debug --no-codesign --no-pub \
+            --build-number "$GITHUB_RUN_NUMBER" \
+            --dart-define-from-file="$RUNNER_TEMP/tmusic-ios-public-defines.json"
+          device="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(device["udid"] for devices in data["devices"].values() for device in devices if device["isAvailable"] and device["name"].startswith("iPhone")))')"
+          xcrun simctl boot "$device" 2>/dev/null || true
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app
+          xcrun simctl launch "$device" com.tmusic.tmusic
+          sleep 8
+          xcrun simctl listapps "$device" | grep -F 'com.tmusic.tmusic'
+          xcrun simctl spawn "$device" launchctl list | grep -F 'com.tmusic.tmusic'
+
       - name: Đóng gói IPA
         run: |
           set -euo pipefail

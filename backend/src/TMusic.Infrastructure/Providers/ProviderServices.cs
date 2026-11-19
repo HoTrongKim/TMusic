@@ -13,7 +13,20 @@ public static class ProviderServices
     public static IServiceCollection AddProviders(this IServiceCollection services, IConfiguration configuration)
     {
         services.TryAddSingleton(TimeProvider.System);
-        services.TryAddSingleton<IAudioStorage, AudioStorage>();
+        services.AddOptions<AudioDownloadOptions>().BindConfiguration("AudioDownload");
+        services.AddOptions<ObjectStorageOptions>().BindConfiguration("Storage:Object");
+        services.TryAddTransient<AudioStorage>();
+        services.AddTransient<S3AudioStorage>();
+        services.AddTransient<HybridAudioStorage>();
+        services.TryAddSingleton<IAudioStorage>(provider =>
+        {
+            var storageProvider = provider.GetRequiredService<IConfiguration>().GetValue<string>("Storage:Provider");
+            if (string.IsNullOrWhiteSpace(storageProvider) || storageProvider.Equals("local", StringComparison.OrdinalIgnoreCase))
+                return ActivatorUtilities.CreateInstance<AudioStorage>(provider);
+            if (storageProvider.Equals("s3", StringComparison.OrdinalIgnoreCase))
+                return provider.GetRequiredService<HybridAudioStorage>();
+            throw new InvalidOperationException("Storage:Provider must be 'local' or 's3'.");
+        });
         services.TryAddSingleton<IAudioExtractor, YtDlpAudioExtractor>();
         services.AddScoped<ProviderQuota>();
         services.AddHttpClient<YouTubeApi>(http =>
@@ -35,6 +48,7 @@ public static class ProviderServices
         services.AddScoped<ISourceResolver, SourceResolver>();
         services.AddScoped<ImportProcessor>();
         services.AddScoped<AudioDownloadProcessor>();
+        services.AddSingleton<AudioDownloadQueueRunner>();
         return services;
     }
 }

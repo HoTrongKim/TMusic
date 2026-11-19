@@ -19,8 +19,15 @@ internal sealed class ImportWorker(IServiceScopeFactory scopeFactory, TimeProvid
     {
         if (config.GetValue("Features:EnableAudioDownloads", false))
         {
-            if (extractor.IsAvailable) logger.LogInformation("Audio download tools validated at worker startup (yt-dlp and FFmpeg available).");
-            else logger.LogWarning("Audio downloads are enabled but required extraction binaries (yt-dlp / FFmpeg) were not found at worker startup.");
+            try
+            {
+                if (await extractor.ValidateToolsAsync(stoppingToken)) logger.LogInformation("Audio download tools passed worker startup validation (yt-dlp and FFmpeg).");
+                else logger.LogWarning("Audio downloads are enabled but yt-dlp or FFmpeg failed worker startup validation.");
+            }
+            catch (Exception error) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogWarning("Worker audio tool validation failed with {ErrorType}.", error.GetType().Name);
+            }
         }
         var nextCleanup = clock.GetUtcNow();
         while (!stoppingToken.IsCancellationRequested)
@@ -28,14 +35,14 @@ internal sealed class ImportWorker(IServiceScopeFactory scopeFactory, TimeProvid
             try
             {
                 await using var scope = scopeFactory.CreateAsyncScope();
-                var downloads = scope.ServiceProvider.GetRequiredService<AudioDownloadProcessor>();
+                var downloads = scope.ServiceProvider.GetRequiredService<AudioDownloadQueueRunner>();
                 var processor = scope.ServiceProvider.GetRequiredService<ImportProcessor>();
                 if (clock.GetUtcNow() >= nextCleanup)
                 {
                     await processor.PurgeExpiredAsync(stoppingToken);
                     nextCleanup = clock.GetUtcNow().AddMinutes(5);
                 }
-                if (await downloads.ProcessOneAsync(stoppingToken)) continue;
+                if (await downloads.ProcessAvailableAsync(stoppingToken)) continue;
                 if (!await processor.ProcessOneAsync(stoppingToken)) await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }

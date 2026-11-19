@@ -30,6 +30,10 @@ String errorText(BuildContext context, Object error) {
       'TIKTOK_IMPORT_DISABLED' => 'tiktokImportDisabled',
       'SOUNDCLOUD_IMPORT_DISABLED' => 'soundcloudImportDisabled',
       'SOURCE_ACCESS_CHECK_REQUIRED' => 'sourceAccessCheckRequired',
+      'SOURCE_AUTHENTICATION_REQUIRED' => 'sourceAuthenticationRequired',
+      'SOURCE_ACCESS_FORBIDDEN' => 'sourceAccessForbidden',
+      'SOURCE_NETWORK_ERROR' => 'sourceNetworkError',
+      'SOURCE_RESTRICTED_OR_UNSUPPORTED' => 'sourceRestricted',
       'SOURCE_RESPONSE_UNSUPPORTED' => 'sourceResponseUnsupported',
       'SOURCE_AUDIO_UNAVAILABLE' => 'sourceAudioUnavailable',
       'PROVIDER_TEMPORARILY_UNAVAILABLE' => 'sourceTemporarilyUnavailable',
@@ -59,6 +63,11 @@ String errorText(BuildContext context, Object error) {
 String downloadFailureText(BuildContext context, String? errorCode) {
   final key = switch (errorCode?.trim().toUpperCase()) {
     'SOURCE_ACCESS_CHECK_REQUIRED' => 'sourceAccessCheckRequired',
+    'SOURCE_AUTHENTICATION_REQUIRED' => 'sourceAuthenticationRequired',
+    'SOURCE_ACCESS_FORBIDDEN' => 'sourceAccessForbidden',
+    'SOURCE_NETWORK_ERROR' || 'NETWORK_ERROR' => 'sourceNetworkError',
+    'SOURCE_RESTRICTED_OR_UNSUPPORTED' => 'sourceRestricted',
+    'AUDIO_STORAGE_UNAVAILABLE' => 'sourceTemporarilyUnavailable',
     'SOURCE_AUDIO_UNAVAILABLE' => 'sourceAudioUnavailable',
     'SOURCE_RESPONSE_UNSUPPORTED' => 'sourceResponseUnsupported',
     'SOURCE_UNAVAILABLE' => 'sourceContentUnavailable',

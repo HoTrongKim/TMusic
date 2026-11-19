@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme/tmusic_theme.dart';
 import '../../core/localization/app_copy.dart';
 import '../../core/widgets/common.dart';
+import '../../core/widgets/motion.dart';
 import '../../shared/models/library_models.dart';
 import '../library/library_repository.dart';
 import '../songs/song_actions.dart';
@@ -116,6 +117,62 @@ class _LocalAudioScreenState extends ConsumerState<LocalAudioScreen> {
     });
   }
 
+  Future<void> _addToAlbum(LocalTrack track) async {
+    final repository = ref.read(libraryRepositoryProvider);
+    final albums = <Album>[];
+    for (var page = 1; ; page++) {
+      final result = await repository.albums(page: page);
+      albums.addAll(result.items);
+      if (!result.hasMore) break;
+    }
+    if (!mounted) return;
+    if (albums.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr('createAlbumFirst'))));
+      return;
+    }
+    final selected = await showTMusicSheet<Album>(
+      context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                context.tr('addToAlbum'),
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            for (final album in albums)
+              ListTile(
+                leading: Cover(url: album.coverImageUrl, size: 42, radius: 8),
+                title: Text(album.name),
+                subtitle: Text('${album.songCount} ${context.tr('songs')}'),
+                onTap: () => Navigator.of(sheetContext).pop(album),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    if (track.id.startsWith('song:')) {
+      final song = await repository.song(track.id.substring('song:'.length));
+      await repository.addToAlbum(selected, song);
+      ref.read(libraryRevisionProvider.notifier).changed();
+    } else {
+      await (await ref.read(localLibraryProvider.future))
+          .addTrackToAlbum(track.id, selected.id);
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.tr('localTrackAddedToAlbum'))),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -209,21 +266,34 @@ class _LocalAudioScreenState extends ConsumerState<LocalAudioScreen> {
                               await player.start(_tracks, index);
                               if (mounted) setState(() => _player = player);
                             }),
-                      trailing: IconButton(
-                        tooltip: context.tr('delete'),
-                        icon: Icon(
-                          Icons.delete_outline_rounded,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                        onPressed: _busy
-                            ? null
-                            : () => _run(() async {
-                                await activePlayer?.stop();
-                                await (await ref.read(
-                                  localLibraryProvider.future,
-                                )).remove(track);
-                                await _load();
-                              }),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            key: Key('local-track-add-album-${track.id}'),
+                            tooltip: context.tr('addToAlbum'),
+                            icon: const Icon(Icons.playlist_add_rounded),
+                            onPressed: _busy
+                                ? null
+                                : () => _run(() => _addToAlbum(track)),
+                          ),
+                          IconButton(
+                            tooltip: context.tr('delete'),
+                            icon: Icon(
+                              Icons.delete_outline_rounded,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            onPressed: _busy
+                                ? null
+                                : () => _run(() async {
+                                    await activePlayer?.stop();
+                                    await (await ref.read(
+                                      localLibraryProvider.future,
+                                    )).remove(track);
+                                    await _load();
+                                  }),
+                          ),
+                        ],
                       ),
                     ),
                 ],
@@ -397,9 +467,7 @@ class _LocalPlayerControlsState extends State<LocalPlayerControls> {
                                   key: const Key('player-seek-slider'),
                                   value: effectiveMs.toDouble(),
                                   min: 0,
-                                  max: safeTotal > 0
-                                      ? safeTotal.toDouble()
-                                      : 1,
+                                  max: safeTotal > 0 ? safeTotal.toDouble() : 1,
                                   onChangeStart: safeTotal > 0
                                       ? (v) => setState(() => _dragMs = v)
                                       : null,
@@ -677,10 +745,7 @@ class _LocalPlayerControlsState extends State<LocalPlayerControls> {
         return Material(
           color: scheme.surfaceContainerLow,
           borderRadius: BorderRadius.circular(14),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: content,
-          ),
+          child: Padding(padding: const EdgeInsets.all(14), child: content),
         );
       },
     );
@@ -781,8 +846,7 @@ class _LocalPlayerControlsState extends State<LocalPlayerControls> {
                         ? Duration(milliseconds: safeTotalMs)
                         : a + const Duration(seconds: 15);
                     final b =
-                        (ab != null &&
-                            ab.end > a + const Duration(seconds: 1))
+                        (ab != null && ab.end > a + const Duration(seconds: 1))
                         ? ab.end
                         : fallbackEnd;
                     widget.player.setAbLoop(a, b);

@@ -58,7 +58,7 @@ public static class SongEndpoints
         context.Response.Headers.ETag=$"\"{Convert.ToBase64String(song.Version)}\"";
         return Results.Ok(LibraryViews.Song(song,time.GetUtcNow()));
     }
-    private static async Task<IResult> Create(CreateSongRequest r,ClaimsPrincipal u,TMusicDb db,ISourceResolver resolver,IAudioExtractor extractor,IConfiguration config,TimeProvider clock,CancellationToken ct)
+    private static async Task<IResult> Create(CreateSongRequest r,ClaimsPrincipal u,TMusicDb db,ISourceResolver resolver,IAudioExtractor extractor,TimeProvider clock,CancellationToken ct)
     {
         if (r.Url is not { Length: >0 and <=2048 } || !ValidTitle(r.CustomTitle,r.CustomArtist) || r.AlbumIds?.Length>20) return ApiSupport.Problem("INVALID_SONG");
         if (r.DownloadMp3)
@@ -73,7 +73,6 @@ public static class SongEndpoints
         await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable,ct);
         var albums=await db.Albums.Where(x=>x.OwnerId==user && albumIds.Contains(x.Id)).ToListAsync(ct);
         if (albums.Count!=albumIds.Length) return Results.NotFound();
-        if (albums.Any(x=>!LibraryViews.CanAttach(x,source.Provider,config))) return ApiSupport.Problem("COLLECTION_POLICY_RESTRICTED",409,"Chọn album cùng nguồn hoặc tạo album mới.");
         var now=clock.GetUtcNow();
         var song=await db.Songs.SingleOrDefaultAsync(x=>x.Provider==source.Provider && x.ProviderContentId==source.ProviderContentId,ct);
         if (song is null)
@@ -101,7 +100,7 @@ public static class SongEndpoints
             if (entry.AlbumSongs.Any(x=>x.AlbumId==album.Id)) continue;
             var position=await db.AlbumSongs.Where(x=>x.AlbumId==album.Id).MaxAsync(x=>(long?)x.Position,ct)??-1;
             entry.AlbumSongs.Add(new AlbumSong { UserId=user,AlbumId=album.Id,UserLibrarySongId=entry.Id,Position=position+1,AddedAt=now });
-            album.SourceBoundary??=source.Provider+":bookmarks"; album.UpdatedAt=now;
+            album.UpdatedAt=now;
         }
         Guid? queuedJobId=null;
         if (r.DownloadMp3 && !(entry.AudioStatus==ImportStatus.Ready && entry.AudioFileName is { Length: >0 }))

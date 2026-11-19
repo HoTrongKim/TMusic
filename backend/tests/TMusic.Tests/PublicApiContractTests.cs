@@ -28,6 +28,7 @@ public sealed class PublicApiContractTests
         Assert.False(capabilities.GetProperty("googleSignIn").GetBoolean());
         Assert.False(capabilities.GetProperty("appleSignIn").GetBoolean());
         Assert.False(capabilities.GetProperty("multiPlaylistMerge").GetBoolean());
+        Assert.True(capabilities.GetProperty("crossProviderMixedCollections").GetBoolean());
         Assert.False(capabilities.GetProperty("licensedAudioDownload").GetBoolean());
     }
 }

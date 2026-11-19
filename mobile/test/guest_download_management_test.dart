@@ -81,6 +81,35 @@ class _ClaimApi extends ApiClient {
   }
 }
 
+class _GuestClaimAlbumsApi extends ApiClient {
+  static const album = {
+    'id': 'cloud-album',
+    'name': 'Album trên máy',
+    'version': 'v1',
+    'songCount': 0,
+  };
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String method,
+    String path, {
+    Map<String, dynamic>? data,
+    Map<String, dynamic>? query,
+    String? version,
+    Map<String, dynamic>? headers,
+  }) async {
+    if (path == '/albums' && method == 'POST') return album;
+    if (path == '/albums/cloud-album') return album;
+    if (path == '/albums/cloud-album/songs') {
+      return {'items': <dynamic>[], 'total': 0, 'page': 1, 'pageSize': 30};
+    }
+    if (path == '/albums/cloud-album/songs/order' && method == 'PATCH') {
+      return <String, dynamic>{};
+    }
+    throw StateError('Unexpected $method $path');
+  }
+}
+
 Future<Song> _guestSong(GuestLibraryStore store, {bool ready = false}) =>
     store.saveSong(
       url: 'https://soundcloud.com/artist/track',
@@ -101,24 +130,103 @@ ProviderContainer _container(GuestLibraryStore store) => ProviderContainer(
 );
 
 // SQLite's platform boundary is replaced; production file copies/deletions stay real.
-class _TrackDatabase implements Database {
+class _TrackDatabase implements Database, Transaction {
   final rows = <String, Map<String, Object?>>{};
+  final albumRows = <String, Map<String, Object?>>{};
   bool failInsert = false;
 
   @override
   dynamic noSuchMethod(Invocation invocation) {
     if (invocation.memberName == #query) {
-      return Future.value(rows.values.map(Map<String, Object?>.from).toList());
+      final table = invocation.positionalArguments[0] as String;
+      final source = table == 'album_tracks' ? albumRows : rows;
+      final args = invocation.namedArguments[#whereArgs] as List?;
+      var values = source.values.toList();
+      if (table == 'album_tracks' && args != null && args.isNotEmpty) {
+        final albumArg = args[0];
+        final trackArg = args.length > 1 ? args[1] : null;
+        values = values
+            .where((row) => row['albumId'] == albumArg)
+            .where((row) => trackArg == null || row['trackId'] == trackArg)
+            .toList();
+      }
+      return Future.value(values.map(Map<String, Object?>.from).toList());
+    }
+    if (invocation.memberName == #rawQuery) {
+      final query = invocation.positionalArguments[0] as String;
+      final args = invocation.positionalArguments[1] as List?;
+      final albumId = args?.first;
+      if (query.contains('MAX(position)')) {
+        final positions = albumRows.values
+            .where((row) => row['albumId'] == albumId)
+            .map((row) => row['position']! as int);
+        return Future.value([
+          {
+            'position': positions.isEmpty
+                ? null
+                : positions.reduce((a, b) => a > b ? a : b),
+          },
+        ]);
+      }
+      final memberships =
+          albumRows.values.where((row) => row['albumId'] == albumId).toList()
+            ..sort(
+              (a, b) =>
+                  (a['position']! as int).compareTo(b['position']! as int),
+            );
+      return Future.value(
+        memberships
+            .map((row) => rows[row['trackId']]!)
+            .map(
+              (row) => {
+                'id': row['id'],
+                'title': row['title'],
+                'path': row['path'],
+              },
+            )
+            .toList(),
+      );
     }
     if (invocation.memberName == #insert) {
       if (failInsert) throw const FileSystemException('Storage full');
+      final table = invocation.positionalArguments[0] as String;
       final row = Map<String, Object?>.from(invocation.positionalArguments[1]);
-      rows[row['id']! as String] = row;
+      if (table == 'album_tracks') {
+        albumRows['${row['albumId']}:${row['trackId']}'] = row;
+      } else {
+        rows[row['id']! as String] = row;
+      }
       return Future.value(1);
     }
     if (invocation.memberName == #delete) {
+      final table = invocation.positionalArguments[0] as String;
       final args = invocation.namedArguments[#whereArgs] as List?;
+      if (table == 'album_tracks') {
+        final before = albumRows.length;
+        albumRows.removeWhere((_, row) {
+          if (args == null || args.isEmpty) return false;
+          if (args.length == 1) return row['trackId'] == args[0];
+          return row['albumId'] == args[0] && row['trackId'] == args[1];
+        });
+        return Future.value(before - albumRows.length);
+      }
       return Future.value(rows.remove(args?.first) == null ? 0 : 1);
+    }
+    if (invocation.memberName == #update) {
+      final table = invocation.positionalArguments[0] as String;
+      final values = Map<String, Object?>.from(
+        invocation.positionalArguments[1],
+      );
+      final args = invocation.namedArguments[#whereArgs] as List;
+      if (table == 'album_tracks') {
+        final row = albumRows['${args[0]}:${args[1]}'];
+        if (row != null) row.addAll(values);
+      }
+      return Future.value(1);
+    }
+    if (invocation.memberName == #transaction) {
+      final action = invocation.positionalArguments[0] as Function;
+      return Future.sync(() => action(this));
     }
     return super.noSuchMethod(invocation);
   }
@@ -191,6 +299,69 @@ void main() {
       expect(await guest.list(), isEmpty);
       expect(await repo.syncGuestDataToCloud(userId: 'account-1'), isFalse);
       expect(await account.list(), hasLength(1));
+    },
+  );
+
+  test('claim preserves local audio album membership on this device', () async {
+    final temp = await Directory.systemTemp.createTemp('tmusic-claim-album-');
+    addTearDown(() => temp.delete(recursive: true));
+    final guest = LocalLibrary(
+      await Directory('${temp.path}/guest').create(),
+      _TrackDatabase(),
+    );
+    final account = LocalLibrary(
+      await Directory('${temp.path}/account').create(),
+      _TrackDatabase(),
+    );
+    final source = await _importedTrack(guest, 'imported-recording');
+    final store = GuestLibraryStore();
+    final album = await store.saveAlbum(
+      name: 'Album trên máy',
+      description: '',
+    );
+    await guest.addTrackToAlbum(source.id, album.id);
+    final container = _container(store);
+    addTearDown(container.dispose);
+    final repo = _repoWithAudio(
+      container,
+      store,
+      guest,
+      account,
+      api: _GuestClaimAlbumsApi(),
+    );
+
+    expect(await repo.syncGuestDataToCloud(userId: 'account-1'), isTrue);
+
+    final copied = await account.listAlbumTracks('cloud-album');
+    expect(copied.map((track) => track.id), [source.id]);
+    expect(await File(copied.single.path).exists(), isTrue);
+    expect(await guest.list(), isEmpty);
+    expect(await guest.listAlbumTracks(album.id), isEmpty);
+  });
+
+  test(
+    'local audio can be attached to and filtered inside a local album',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('tmusic-local-album-');
+      addTearDown(() => temp.delete(recursive: true));
+      final local = LocalLibrary(
+        await Directory('${temp.path}/audio').create(),
+        _TrackDatabase(),
+      );
+      final track = await _importedTrack(local, 'device-track');
+      final store = GuestLibraryStore();
+      final album = await store.saveAlbum(name: 'Thiết bị', description: '');
+
+      await local.addTrackToAlbum(track.id, album.id);
+      await local.addTrackToAlbum(track.id, album.id);
+      expect((await local.listAlbumTracks(album.id)).map((item) => item.id), [
+        track.id,
+      ]);
+
+      await local.removeTrackFromAlbum(track.id, album.id);
+      expect(await local.listAlbumTracks(album.id), isEmpty);
+      expect(await local.list(), hasLength(1));
+      expect(await File(track.path).exists(), isTrue);
     },
   );
 

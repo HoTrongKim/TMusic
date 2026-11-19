@@ -128,6 +128,7 @@ public sealed class AudioDownloadCancellationTests(SqlApiFixture fixture)
     {
         public TaskCompletionSource Stored { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsObjectStorage => inner.IsObjectStorage;
         public bool IsValidMp3Header(ReadOnlySpan<byte> header) => inner.IsValidMp3Header(header);
         public async Task<StoredAudio> SaveFromTempFileAsync(Guid userId, string tempFilePath, CancellationToken ct)
         {

@@ -268,7 +268,7 @@ public static class AdminOperationsEndpoints
         var orphanAudio = audioFiles.Where(f => !referencedAudioSet.Contains($"{f.UserId:N}/{f.FileName}")).ToList();
         var orphanCovers = coverFiles.Where(f => !referencedCoverSet.Contains($"{f.UserId:N}/{f.FileName}")).ToList();
 
-        var quarantineAudioBytes = MeasureDirectoryBytes(Path.Combine(audioStorage.StorageRootPath, "_quarantine"));
+        var quarantineAudioBytes = audioStorage.IsObjectStorage ? 0 : MeasureDirectoryBytes(Path.Combine(audioStorage.StorageRootPath, "_quarantine"));
         var quarantineCoverBytes = MeasureDirectoryBytes(Path.Combine(coverStorage.StorageRootPath, "_quarantine"));
         var tempDownloadBytes = MeasureMatchingTempBytes();
 
@@ -321,8 +321,10 @@ public static class AdminOperationsEndpoints
                 {
                     label = "Object Storage (S3/R2)",
                     bytes = (long?)null,
-                    status = "NOT_CONFIGURED",
-                    note = "Chưa có dữ liệu — hệ thống hiện lưu trên volume đĩa của backend."
+                    status = audioStorage.IsObjectStorage ? "AVAILABLE" : "NOT_CONFIGURED",
+                    note = audioStorage.IsObjectStorage
+                        ? "Đã cấu hình object storage; thống kê MP3 tổng hợp gộp object và tệp local legacy nên không báo riêng dung lượng bucket."
+                        : "Chưa cấu hình object storage; hệ thống tiếp tục dùng storage tương thích hiện tại."
                 },
                 tempAndQuarantine = new
                 {

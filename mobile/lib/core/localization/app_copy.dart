@@ -20,24 +20,21 @@ class AppCopy {
         'Chứng thực đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng thử lại.',
     'providerEmailRequired': 'Nhà cung cấp chưa cung cấp email cần thiết. Hãy chọn tài khoản khác hoặc đăng nhập bằng email.',
     'socialAuthUnavailable': 'Đăng nhập qua nhà cung cấp này chưa sẵn sàng. Vui lòng thử lại sau hoặc đăng nhập bằng email.',
-    'sourceUrlInvalid':
-        'Liên kết không hợp lệ hoặc chưa được hỗ trợ. Hãy dùng liên kết HTTPS từ YouTube, TikTok hoặc SoundCloud.',
-    'sourceRedirectUnsupported':
-        'Liên kết chuyển tới địa chỉ không được hỗ trợ. Hãy mở trong ứng dụng gốc rồi sao chép lại liên kết trực tiếp của bài đăng.',
-    'sourceShortLinkUnresolved':
-        'Chưa xác định được bài đăng từ liên kết rút gọn. Hãy mở trong ứng dụng gốc rồi sao chép liên kết trực tiếp để thử lại.',
-    'sourceContentUnavailable':
-        'Nội dung không khả dụng. Hãy kiểm tra liên kết trong ứng dụng gốc hoặc chọn nội dung khác.',
+    'sourceUrlInvalid': 'Liên kết không hợp lệ hoặc chưa được hỗ trợ. Hãy dùng liên kết HTTPS từ YouTube, TikTok hoặc SoundCloud.',
+    'sourceRedirectUnsupported': 'Liên kết chuyển tới địa chỉ không được hỗ trợ. Hãy mở trong ứng dụng gốc rồi sao chép lại liên kết trực tiếp của bài đăng.',
+    'sourceShortLinkUnresolved': 'Chưa xác định được bài đăng từ liên kết rút gọn. Hãy mở trong ứng dụng gốc rồi sao chép liên kết trực tiếp để thử lại.',
+    'sourceContentUnavailable': 'Nội dung không khả dụng. Hãy kiểm tra liên kết trong ứng dụng gốc hoặc chọn nội dung khác.',
     'tiktokImportDisabled':
         'Nhận diện liên kết TikTok hiện chưa sẵn sàng. Vui lòng thử lại sau.',
-    'soundcloudImportDisabled':
-        'Nhận diện liên kết SoundCloud hiện chưa sẵn sàng. Vui lòng thử lại sau.',
-    'sourceAccessCheckRequired':
-        'Nguồn đang yêu cầu xác minh truy cập. Hãy mở nội dung trong ứng dụng gốc; TMusic chưa thể tải nội dung này.',
-    'sourceResponseUnsupported':
-        'Chưa đọc được phản hồi từ nguồn. Hãy thử lại sau hoặc mở nội dung trong ứng dụng gốc.',
-    'sourceAudioUnavailable':
-        'Bài đăng chưa cung cấp âm thanh công khai có thể tải. Bạn vẫn có thể mở nội dung trong ứng dụng gốc.',
+    'soundcloudImportDisabled': 'Nhận diện liên kết SoundCloud hiện chưa sẵn sàng. Vui lòng thử lại sau.',
+    'sourceAccessCheckRequired': 'Nguồn đang yêu cầu xác minh truy cập. Hãy mở nội dung trong ứng dụng gốc; TMusic chưa thể tải nội dung này.',
+    'sourceAuthenticationRequired': 'Nguồn yêu cầu đăng nhập hoặc quyền truy cập. TMusic không thể dùng phiên đăng nhập của bạn để tải nội dung này.',
+    'sourceAccessForbidden': 'Nguồn từ chối yêu cầu tải nội dung này (403). Hãy mở liên kết trong ứng dụng gốc hoặc chọn nguồn được phép tải.',
+    'sourceNetworkError':
+        'Kết nối tới nguồn bị gián đoạn. Hãy kiểm tra mạng rồi thử lại sau.',
+    'sourceRestricted': 'Nguồn đánh dấu nội dung là riêng tư, có giới hạn hoặc không hỗ trợ tải. TMusic không thể tải nội dung này.',
+    'sourceResponseUnsupported': 'Chưa đọc được phản hồi từ nguồn. Hãy thử lại sau hoặc mở nội dung trong ứng dụng gốc.',
+    'sourceAudioUnavailable': 'Bài đăng chưa cung cấp âm thanh công khai có thể tải. Bạn vẫn có thể mở nội dung trong ứng dụng gốc.',
     'sourceTemporarilyUnavailable':
         'Nguồn đang tạm thời gián đoạn. Vui lòng thử lại sau.',
     'tooManyRequests':
@@ -252,7 +249,8 @@ class AppCopy {
     'mp3Failed': 'Chưa trích xuất được MP3 (nguồn bị giới hạn hoặc mạng gián đoạn). Bạn vẫn có thể mở trên ứng dụng gốc hoặc thử lại.',
     'audioConversionFailed': 'Không chuyển đổi được âm thanh sang MP3. Bạn có thể mở trên ứng dụng gốc hoặc chọn nguồn khác.',
     'mp3BitrateLabel': 'Chất lượng MP3',
-    'mp3BitrateNote': 'Chuyển đổi bitrate không làm tăng chất lượng vượt quá nguồn gốc.',
+    'mp3BitrateNote':
+        'Chuyển đổi bitrate không làm tăng chất lượng vượt quá nguồn gốc.',
     'authorCredit': 'Tác giả: Tears',
     'libraryStats': 'Thống kê thư viện',
     'storageUsage': 'Dung lượng lưu trữ',
@@ -290,6 +288,14 @@ class AppCopy {
     'batchRemoveAlbumConfirmBody': 'Gỡ {count} bài hát đã chọn khỏi album này? File nhạc gốc sẽ được giữ nguyên.',
     'batchDoneNotice': 'Đã hoàn tất thao tác cho {count} bài hát.',
     'albumDeleteImpact': 'Album này đang có {count} bài hát. Xóa album sẽ không xóa bài hát hay file nhạc gốc trên thiết bị.',
+    'filterAlbumSources': 'Lọc theo nguồn',
+    'allSources': 'Tất cả',
+    'youtubeSource': 'YouTube',
+    'tiktokSource': 'TikTok',
+    'soundcloudSource': 'SoundCloud',
+    'localAudioSource': 'Trên thiết bị',
+    'createAlbumFirst': 'Hãy tạo album trước khi thêm tệp âm thanh.',
+    'localTrackAddedToAlbum': 'Đã thêm tệp trên thiết bị vào album.',
     'downloadsTitle': 'Tiến trình tải MP3',
     'emptyDownloads': 'Chưa có tiến trình tải MP3',
     'emptyDownloadsBody': 'Bật tùy chọn tải MP3 khi thêm liên kết hoặc bấm Tải MP3 trong chi tiết bài hát.',
@@ -352,7 +358,7 @@ class AppCopy {
     'upNextQueue': 'Danh sách đang phát',
     'expandPlayer': 'Mở trình phát đầy đủ',
     'importPlaylist': 'Nhập playlist YouTube',
-    'playlistNotice': 'Nhập một playlist mỗi lần. Album trộn nhiều nguồn đang được giới hạn theo chính sách.',
+    'playlistNotice': 'Nhập một playlist mỗi lần. Bạn vẫn có thể lưu playlist vào album chứa nhiều nguồn.',
     'noNotifications': 'Ứng dụng chưa gửi thông báo.',
     'linkGoogle': 'Liên kết tài khoản Google',
     'linkApple': 'Liên kết tài khoản Apple',
@@ -371,24 +377,19 @@ class AppCopy {
         'The sign-in credential is invalid or expired. Please try again.',
     'providerEmailRequired': 'The provider did not supply the required email. Choose another account or sign in with email.',
     'socialAuthUnavailable': 'Sign-in with this provider is not available. Try again later or sign in with email.',
-    'sourceUrlInvalid':
-        'The link is invalid or unsupported. Use an HTTPS link from YouTube, TikTok, or SoundCloud.',
-    'sourceRedirectUnsupported':
-        'The link redirects to an unsupported address. Open it in the original app and copy the direct post link again.',
-    'sourceShortLinkUnresolved':
-        'Could not find the post from this short link. Open it in the original app and copy the direct post link to retry.',
-    'sourceContentUnavailable':
-        'This content is unavailable. Check the link in the original app or choose different content.',
-    'tiktokImportDisabled':
-        'TikTok link recognition is currently unavailable. Please try again later.',
-    'soundcloudImportDisabled':
-        'SoundCloud link recognition is currently unavailable. Please try again later.',
-    'sourceAccessCheckRequired':
-        'The source requires an access check. Open the content in the original app; TMusic cannot download it right now.',
-    'sourceResponseUnsupported':
-        'Could not read the source response. Try again later or open the content in the original app.',
-    'sourceAudioUnavailable':
-        'This post does not provide publicly downloadable audio. You can still open the content in the original app.',
+    'sourceUrlInvalid': 'The link is invalid or unsupported. Use an HTTPS link from YouTube, TikTok, or SoundCloud.',
+    'sourceRedirectUnsupported': 'The link redirects to an unsupported address. Open it in the original app and copy the direct post link again.',
+    'sourceShortLinkUnresolved': 'Could not find the post from this short link. Open it in the original app and copy the direct post link to retry.',
+    'sourceContentUnavailable': 'This content is unavailable. Check the link in the original app or choose different content.',
+    'tiktokImportDisabled': 'TikTok link recognition is currently unavailable. Please try again later.',
+    'soundcloudImportDisabled': 'SoundCloud link recognition is currently unavailable. Please try again later.',
+    'sourceAccessCheckRequired': 'The source requires an access check. Open the content in the original app; TMusic cannot download it right now.',
+    'sourceAuthenticationRequired': 'The source requires sign-in or authorization. TMusic cannot use your source account session to download it.',
+    'sourceAccessForbidden': 'The source denied this download request (403). Open the link in the original app or choose a source that permits downloading.',
+    'sourceNetworkError': 'The connection to the source was interrupted. Check your network and try again later.',
+    'sourceRestricted': 'The source marks this content as private, restricted, or unsupported for download. TMusic cannot download it.',
+    'sourceResponseUnsupported': 'Could not read the source response. Try again later or open the content in the original app.',
+    'sourceAudioUnavailable': 'This post does not provide publicly downloadable audio. You can still open the content in the original app.',
     'sourceTemporarilyUnavailable':
         'The source is temporarily unavailable. Please try again later.',
     'tooManyRequests': 'Too many requests. Please wait a moment and try again.',
@@ -634,6 +635,14 @@ class AppCopy {
     'batchRemoveAlbumConfirmBody': 'Remove {count} selected songs from this album? Original audio files will be kept.',
     'batchDoneNotice': 'Completed action for {count} songs.',
     'albumDeleteImpact': 'This album has {count} songs. Deleting the album will not delete your songs or local audio files.',
+    'filterAlbumSources': 'Filter by source',
+    'allSources': 'All',
+    'youtubeSource': 'YouTube',
+    'tiktokSource': 'TikTok',
+    'soundcloudSource': 'SoundCloud',
+    'localAudioSource': 'On device',
+    'createAlbumFirst': 'Create an album before adding local audio.',
+    'localTrackAddedToAlbum': 'On-device audio added to the album.',
     'downloadsTitle': 'MP3 Downloads',
     'emptyDownloads': 'No MP3 download jobs yet',
     'emptyDownloadsBody': 'Enable MP3 download when saving a link or tap Download MP3 on any song.',
@@ -695,8 +704,7 @@ class AppCopy {
     'upNextQueue': 'Playing Queue',
     'expandPlayer': 'Open full player',
     'importPlaylist': 'Import YouTube playlist',
-    'playlistNotice':
-        'One playlist per import. Mixing sources is limited by policy.',
+    'playlistNotice': 'Import one playlist at a time. Playlists can still be saved into mixed-source albums.',
     'noNotifications': 'Notifications are not available.',
     'linkGoogle': 'Link Google account',
     'linkApple': 'Link Apple account',

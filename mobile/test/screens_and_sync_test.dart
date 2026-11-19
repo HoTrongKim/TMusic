@@ -9,6 +9,7 @@ import 'package:tmusic/core/auth/session.dart';
 import 'package:tmusic/core/storage/guest_library_store.dart';
 import 'package:tmusic/features/library/library_repository.dart';
 import 'package:tmusic/features/playback/local_audio.dart';
+import 'package:tmusic/features/playback/local_audio_screen.dart';
 import 'package:tmusic/features/settings/settings_controller.dart';
 
 class _ActiveSession extends SessionController {
@@ -21,6 +22,11 @@ class _ActiveSession extends SessionController {
   });
 }
 
+class _GuestSession extends SessionController {
+  @override
+  Future<Session?> build() async => null;
+}
+
 class _DefaultSettings extends SettingsController {
   @override
   Future<UserSettings> build() async => const UserSettings();
@@ -28,14 +34,27 @@ class _DefaultSettings extends SettingsController {
 
 class _DownloadedLibrary extends LocalLibrary {
   _DownloadedLibrary() : super(null, null);
-
-  @override
-  Future<List<LocalTrack>> list() async => const [
+  List<LocalTrack> tracks = const [
     LocalTrack('song:cloud-song', 'Mây trên phố', '/local-track.mp3'),
   ];
+  List<LocalTrack> albumTracks = const [];
+  String? addedTrackId;
+  String? addedAlbumId;
+
+  @override
+  Future<List<LocalTrack>> list() async => tracks;
 
   @override
   Future<bool> hasDownloadedSong(String songId) async => songId == 'cloud-song';
+
+  @override
+  Future<List<LocalTrack>> listAlbumTracks(String albumId) async => albumTracks;
+
+  @override
+  Future<void> addTrackToAlbum(String trackId, String albumId) async {
+    addedTrackId = trackId;
+    addedAlbumId = albumId;
+  }
 }
 
 class _ScenarioApi extends ApiClient {
@@ -47,6 +66,7 @@ class _ScenarioApi extends ApiClient {
   bool sharedImported = false;
   bool multipleSongPages = false;
   String? songProviderFilter;
+  String? albumSongProviderFilter;
   static const _sharedTrack = {
     'id': 'cloud-song',
     'version': 'v1',
@@ -78,6 +98,21 @@ class _ScenarioApi extends ApiClient {
       };
     }
     if (path == '/albums/alb-1/songs') {
+      albumSongProviderFilter = query?['provider'] as String?;
+      if (albumSongProviderFilter != null &&
+          albumSongProviderFilter != 'soundcloud') {
+        return {'items': <dynamic>[], 'total': 0, 'page': 1, 'pageSize': 30};
+      }
+      if (albumSongProviderFilter == 'soundcloud') {
+        return {
+          'items': [
+            {..._sharedTrack, 'customTitle': 'Cloud track'},
+          ],
+          'total': 1,
+          'page': 1,
+          'pageSize': 30,
+        };
+      }
       return {
         'items': [_sharedTrack],
         'total': 1,
@@ -357,6 +392,102 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.shareRevoked, isTrue);
     expect(find.byKey(const Key('album-share-code-text')), findsNothing);
+  });
+
+  testWidgets('album source filter scopes its songs request', (tester) async {
+    final api = _ScenarioApi();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sessionProvider.overrideWith(_ActiveSession.new),
+          publicApiProvider.overrideWithValue(api),
+          authorizedApiProvider.overrideWithValue(api),
+        ],
+        child: const TMusicApp(initialLocation: '/albums/alb-1'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Mây trên phố'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('album-source-soundcloud')));
+    await tester.pumpAndSettle();
+
+    expect(api.albumSongProviderFilter, 'soundcloud');
+    expect(find.text('Cloud track'), findsOneWidget);
+    expect(find.text('Mây trên phố'), findsNothing);
+  });
+
+  testWidgets('album local source filter displays device audio only', (
+    tester,
+  ) async {
+    final api = _ScenarioApi();
+    final local = _DownloadedLibrary()
+      ..albumTracks = const [
+        LocalTrack('import-1', 'Bản thu trên máy', '/device/import-1.mp3'),
+      ];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sessionProvider.overrideWith(_ActiveSession.new),
+          publicApiProvider.overrideWithValue(api),
+          authorizedApiProvider.overrideWithValue(api),
+          localLibraryProvider.overrideWith((_) async => local),
+          localAudioProvider.overrideWith((_) async => LocalAudio.forTest()),
+        ],
+        child: const TMusicApp(initialLocation: '/albums/alb-1'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Bản thu trên máy'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('album-source-local')));
+    await tester.pumpAndSettle();
+
+    expect(api.albumSongProviderFilter, isNull);
+    expect(find.text('Bản thu trên máy'), findsOneWidget);
+    expect(find.text('Mây trên phố'), findsNothing);
+  });
+
+  testWidgets('local audio can be assigned to an existing album', (
+    tester,
+  ) async {
+    final api = _ScenarioApi();
+    final store = GuestLibraryStore();
+    final album = await store.saveAlbum(
+      name: 'Góc Nhạc Acoustic',
+      description: '',
+    );
+    final local = _DownloadedLibrary()
+      ..tracks = const [
+        LocalTrack('import-1', 'Bản thu trên máy', '/device/import-1.mp3'),
+      ];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sessionProvider.overrideWith(_GuestSession.new),
+          guestLibraryStoreProvider.overrideWithValue(store),
+          publicApiProvider.overrideWithValue(api),
+          authorizedApiProvider.overrideWithValue(api),
+          localLibraryProvider.overrideWith((_) async => local),
+          localAudioProvider.overrideWith((_) async => LocalAudio.forTest()),
+        ],
+        child: const MaterialApp(
+          locale: Locale('vi'),
+          home: LocalAudioScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('local-track-add-album-import-1')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Góc Nhạc Acoustic'), findsOneWidget);
+    await tester.tap(find.text('Góc Nhạc Acoustic'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(local.addedTrackId, 'import-1');
+    expect(local.addedAlbumId, album.id);
   });
 
   testWidgets('library previews and imports an attributed shared album', (

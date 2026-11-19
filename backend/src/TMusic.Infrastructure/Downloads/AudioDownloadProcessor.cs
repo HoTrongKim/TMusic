@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using TMusic.Application.Providers;
 using TMusic.Domain.Entities;
 using TMusic.Infrastructure.Persistence;
@@ -14,6 +16,7 @@ namespace TMusic.Infrastructure.Downloads;
 public interface IAudioExtractor
 {
     bool IsAvailable { get; }
+    Task<bool> ValidateToolsAsync(CancellationToken ct) => Task.FromResult(IsAvailable);
     Task<string> ExtractMp3Async(
         string canonicalUrl,
         string workDir,
@@ -28,8 +31,13 @@ public interface IAudioExtractor
         CancellationToken ct) => ExtractMp3Async(canonicalUrl, workDir, onProgress, ct);
 }
 
-public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioExtractor
+public sealed partial class YtDlpAudioExtractor(
+    IConfiguration config,
+    IOptions<AudioDownloadOptions> options) : IAudioExtractor
 {
+    public YtDlpAudioExtractor(IConfiguration config)
+        : this(config, Options.Create(new AudioDownloadOptions())) { }
+
     [GeneratedRegex(@"\[download\]\s+(\d{1,3}(?:\.\d+)?)%", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex DownloadPercentRegex();
 
@@ -37,6 +45,34 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
         config.GetValue("Features:EnableAudioDownloads", false) &&
         ResolveYtDlpPath() is not null &&
         ResolveFfmpegPath() is not null;
+
+    public async Task<bool> ValidateToolsAsync(CancellationToken ct)
+    {
+        var ytDlp = ResolveYtDlpPath();
+        var ffmpeg = ResolveFfmpegPath();
+        if (ytDlp is null || ffmpeg is null) return false;
+        var ytDlpResult = await BoundedAudioProcess.RunAsync(ytDlp, ["--version"], Path.GetTempPath(), null, ct,
+            TimeSpan.FromSeconds(15), captureStandardOutput: true);
+        var ffmpegResult = await BoundedAudioProcess.RunAsync(ffmpeg, ["-version"], Path.GetTempPath(), null, ct,
+            TimeSpan.FromSeconds(15), captureStandardOutput: true);
+        if (!ffmpegResult.StandardError.Contains("ffmpeg version", StringComparison.OrdinalIgnoreCase) &&
+            !ffmpegResult.StandardOutput.Contains("ffmpeg version", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var expectedVersion = config["AudioDownload:YtDlpVersion"];
+        if (ytDlpResult.ExitCode != 0 || ffmpegResult.ExitCode != 0 ||
+            (!string.IsNullOrWhiteSpace(expectedVersion) &&
+             !string.Equals(ytDlpResult.StandardOutput.Trim(), expectedVersion, StringComparison.Ordinal)))
+            return false;
+
+        var expectedDenoVersion = config["AudioDownload:DenoVersion"];
+        if (string.IsNullOrWhiteSpace(expectedDenoVersion)) return true;
+        var deno = ResolveDenoPath();
+        if (deno is null) return false;
+        var denoResult = await BoundedAudioProcess.RunAsync(deno, ["--version"], Path.GetTempPath(), null, ct,
+            TimeSpan.FromSeconds(15), captureStandardOutput: true);
+        return denoResult.ExitCode == 0 && denoResult.StandardOutput.StartsWith(
+            $"deno {expectedDenoVersion}", StringComparison.Ordinal);
+    }
 
     public string? ResolveYtDlpPath() => ResolveBinary(
         config["AudioDownload:YtDlpPath"],
@@ -47,6 +83,11 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
         config["AudioDownload:FfmpegPath"],
         OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg",
         "*FFmpeg*");
+
+    public string? ResolveDenoPath() => ResolveBinary(
+        config["AudioDownload:DenoPath"],
+        OperatingSystem.IsWindows() ? "deno.exe" : "deno",
+        "deno.deno*");
 
     private static string? ResolveBinary(string? configured, string exeName, string wingetFolderGlob)
     {
@@ -80,15 +121,16 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
         return null;
     }
 
-    public static IReadOnlyList<string> BuildSafeArguments(string canonicalUrl, string disabledToolsDirectory, string outputTemplate, string? proxyAddress = null)
+    public static IReadOnlyList<string> BuildSafeArguments(string canonicalUrl, string disabledToolsDirectory,
+        string outputTemplate, string? proxyAddress = null, string? denoPath = null)
     {
         var parsed = SourceUrl.ParseVideo(canonicalUrl)
             ?? throw new ProviderException("INVALID_SOURCE_URL");
         if (!Uri.TryCreate(proxyAddress, UriKind.Absolute, out var proxy) || proxy.Scheme != "http" ||
             proxy.Host != "127.0.0.1" || proxy.IsDefaultPort || proxy.UserInfo.Length == 0)
             throw new ProviderException("AUDIO_EGRESS_REQUIRED");
-        return
-        [
+        var arguments = new List<string>
+        {
             "--no-playlist",
             "--no-cookies",
             "--no-cookies-from-browser",
@@ -111,9 +153,15 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
             // Hide FFmpeg/ffprobe from yt-dlp: only C# may launch the constrained converter.
             "--ffmpeg-location", disabledToolsDirectory,
             "-o", outputTemplate,
-            "--",
-            parsed.CanonicalUrl
-        ];
+        };
+        if (!string.IsNullOrWhiteSpace(denoPath))
+        {
+            arguments.Add("--js-runtimes");
+            arguments.Add($"deno:{Path.GetFullPath(denoPath)}");
+        }
+        arguments.Add("--");
+        arguments.Add(parsed.CanonicalUrl);
+        return arguments;
     }
 
     public static ProviderException ClassifyFailure(string provider, string standardError)
@@ -126,20 +174,29 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
             return new ProviderException("SOURCE_AUDIO_UNAVAILABLE");
 
         if (standardError.Contains("Sign in to confirm you're not a bot", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("Sign in to confirm you\u2019re not a bot", StringComparison.OrdinalIgnoreCase))
+            standardError.Contains("Sign in to confirm you\u2019re not a bot", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("not a bot", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("access check required", StringComparison.OrdinalIgnoreCase))
             return new ProviderException("SOURCE_ACCESS_CHECK_REQUIRED");
+
+        if (standardError.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("login required", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("authentication required", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("HTTP Error 401", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("SOURCE_AUTHENTICATION_REQUIRED");
 
         if (standardError.Contains("Requested format is not available", StringComparison.OrdinalIgnoreCase) ||
             standardError.Contains("No video formats found", StringComparison.OrdinalIgnoreCase))
             return new ProviderException("SOURCE_AUDIO_UNAVAILABLE");
+
+        if (standardError.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("SOURCE_ACCESS_FORBIDDEN");
 
         var nonRetryable = standardError.Contains("DRM", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("Private video", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("members-only", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("Video unavailable", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("This video is unavailable", StringComparison.OrdinalIgnoreCase) ||
-                           standardError.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
-                           standardError.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase) ||
                            standardError.Contains("File is larger than max-filesize", StringComparison.OrdinalIgnoreCase);
         if (nonRetryable)
             return new ProviderException("SOURCE_RESTRICTED_OR_UNSUPPORTED");
@@ -147,6 +204,18 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
         if (standardError.Contains("HTTP Error 429", StringComparison.OrdinalIgnoreCase) ||
             standardError.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase))
             return new ProviderException("RATE_LIMITED", retryable: true);
+
+        if (standardError.Contains("HTTP Error 408", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("HTTP Error 500", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("HTTP Error 502", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("HTTP Error 503", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("HTTP Error 504", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("connection reset", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("Temporary failure in name resolution", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("Name or service not known", StringComparison.OrdinalIgnoreCase) ||
+            standardError.Contains("network is unreachable", StringComparison.OrdinalIgnoreCase))
+            return new ProviderException("SOURCE_NETWORK_ERROR", retryable: true);
 
         if (standardError.Contains("Unable to extract", StringComparison.OrdinalIgnoreCase))
             return new ProviderException("SOURCE_RESPONSE_UNSUPPORTED");
@@ -161,18 +230,33 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
     public static bool IsRetryableErrorCode(string? errorCode) => errorCode?.Trim().ToUpperInvariant() switch
     {
         "SOURCE_ACCESS_CHECK_REQUIRED" or
+        "SOURCE_AUTHENTICATION_REQUIRED" or
+        "SOURCE_ACCESS_FORBIDDEN" or
         "SOURCE_AUDIO_UNAVAILABLE" or
         "SOURCE_RESTRICTED_OR_UNSUPPORTED" or
         "SOURCE_RESPONSE_UNSUPPORTED" or
         "SOURCE_UNAVAILABLE" or
         "AUDIO_CONVERSION_FAILED" or
+        "AUDIO_STORAGE_REJECTED" or
+        "AUDIO_FILE_INVALID" or
+        "AUDIO_FORMAT_INVALID" or
+        "AUDIO_PATH_INVALID" or
         "AUDIO_INPUT_INVALID" or
         "AUDIO_ENGINE_UNAVAILABLE" or
         "RIGHTS_CONFIRMATION_REQUIRED" or
         "INVALID_SOURCE_URL" or
         "UNSUPPORTED_SOURCE_URL" or
         "INVALID_BITRATE" => false,
-        _ => true
+        "AUDIO_DOWNLOAD_TIMEOUT" or
+        "AUDIO_DOWNLOAD_BUSY" or
+        "AUDIO_EXTRACTION_FAILED" or
+        "NETWORK_ERROR" or
+        "SOURCE_NETWORK_ERROR" or
+        "TEMPORARY_FAILURE" or
+        "PROVIDER_TEMPORARILY_UNAVAILABLE" or
+        "AUDIO_STORAGE_UNAVAILABLE" or
+        "RATE_LIMITED" => true,
+        _ => false
     };
 
     public Task<string> ExtractMp3Async(
@@ -203,11 +287,12 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
         var disabledTools = Path.Combine(workDir, "disabled-tools");
         Directory.CreateDirectory(disabledTools);
         var source = SourceUrl.ParseVideo(canonicalUrl) ?? throw new ProviderException("INVALID_SOURCE_URL");
-        await using var egress = new AudioDownloadEgressProxy(source.Provider);
-        var args = BuildSafeArguments(canonicalUrl, disabledTools, downloadedFile, egress.ProxyAddress);
+        var timeout = options.Value.EffectiveTimeout;
+        await using var egress = new AudioDownloadEgressProxy(source.Provider, timeout);
+        var args = BuildSafeArguments(canonicalUrl, disabledTools, downloadedFile, egress.ProxyAddress, ResolveDenoPath());
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromMinutes(3));
+        timeoutCts.CancelAfter(timeout);
         var token = timeoutCts.Token;
 
         var lastReportedPercent = 0;
@@ -228,7 +313,7 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
                         await onProgress(rounded, token);
                     }
                 }
-            }, token);
+            }, token, timeout);
         if (downloaded.ExitCode != 0)
         {
             throw ClassifyFailure(source.Provider, downloaded.StandardError);
@@ -236,7 +321,7 @@ public sealed partial class YtDlpAudioExtractor(IConfiguration config) : IAudioE
 
         await onProgress(95, token);
         var mp3File = Path.Combine(workDir, "track.mp3");
-        await LocalMp3Converter.ConvertAsync(ffmpeg, downloadedFile, mp3File, token, bitrateKbps);
+        await LocalMp3Converter.ConvertAsync(ffmpeg, downloadedFile, mp3File, token, bitrateKbps, timeout);
 
         return mp3File;
     }
@@ -246,7 +331,8 @@ public sealed class AudioDownloadProcessor(
     TMusicDb db,
     IAudioExtractor extractor,
     IAudioStorage storage,
-    TimeProvider clock)
+    TimeProvider clock,
+    IOptions<AudioDownloadOptions> options)
 {
     public async Task<bool> ProcessOneAsync(CancellationToken ct)
     {
@@ -262,7 +348,7 @@ public sealed class AudioDownloadProcessor(
         }
         catch (AudioStorageException e)
         {
-            await FailAsync(job.Id, lease, e.Code, retryable: false, ct);
+            await FailAsync(job.Id, lease, e.Code, e.Retryable, ct);
         }
         catch (ProviderException e)
         {
@@ -273,7 +359,12 @@ public sealed class AudioDownloadProcessor(
             await FailAsync(job.Id, lease, "AUDIO_DOWNLOAD_TIMEOUT", retryable: true, ct);
         }
         catch (Exception e) when (!ct.IsCancellationRequested &&
-            (e is IOException or HttpRequestException or DbUpdateConcurrencyException ||
+            (e is HttpRequestException or IOException or SocketException))
+        {
+            await FailAsync(job.Id, lease, "TEMPORARY_FAILURE", retryable: true, ct);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested &&
+            (e is DbUpdateConcurrencyException ||
              e is DbUpdateException { InnerException: SqlException { Number: 1205 or 2601 or 2627 } }))
         {
             await FailAsync(job.Id, lease, "TEMPORARY_FAILURE", retryable: true, ct);
@@ -305,7 +396,7 @@ public sealed class AudioDownloadProcessor(
         job.Status = ImportStatus.Running;
         job.LeaseOwner = Guid.NewGuid();
         job.HeartbeatAt = now;
-        job.LeaseUntil = now.AddMinutes(4);
+        job.LeaseUntil = now.Add(options.Value.EffectiveLease);
         if (job.ProgressPercent < 5) job.ProgressPercent = 5;
 
         try
@@ -346,22 +437,30 @@ public sealed class AudioDownloadProcessor(
             return;
         }
 
-        var mp3Path = await extractor.ExtractMp3Async(
-            job.CanonicalUrl,
-            tempDir,
-            async (pct, innerCt) =>
-            {
-                var beat = clock.GetUtcNow();
-                var changed = await db.AudioDownloadJobs
-                    .Where(x => x.Id == job.Id && x.LeaseOwner == job.LeaseOwner && x.Status == ImportStatus.Running)
-                    .ExecuteUpdateAsync(s => s
-                        .SetProperty(x => x.ProgressPercent, pct)
-                        .SetProperty(x => x.HeartbeatAt, beat)
-                        .SetProperty(x => x.LeaseUntil, beat.AddMinutes(4)), innerCt);
-                if (changed == 0) throw new OperationCanceledException("Audio download lease was revoked.", innerCt);
-            },
-            job.BitrateKbps,
-            ct);
+        string mp3Path;
+        try
+        {
+            mp3Path = await extractor.ExtractMp3Async(
+                job.CanonicalUrl,
+                tempDir,
+                async (pct, innerCt) =>
+                {
+                    var beat = clock.GetUtcNow();
+                    var changed = await db.AudioDownloadJobs
+                        .Where(x => x.Id == job.Id && x.LeaseOwner == job.LeaseOwner && x.Status == ImportStatus.Running)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(x => x.ProgressPercent, pct)
+                            .SetProperty(x => x.HeartbeatAt, beat)
+                            .SetProperty(x => x.LeaseUntil, beat.Add(options.Value.EffectiveLease)), innerCt);
+                    if (changed == 0) throw new OperationCanceledException("Audio download lease was revoked.", innerCt);
+                },
+                job.BitrateKbps,
+                ct);
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or SocketException)
+        {
+            throw new ProviderException("SOURCE_NETWORK_ERROR", retryable: true);
+        }
 
         var stored = await storage.SaveFromTempFileAsync(job.OwnerId, mp3Path, ct);
 
@@ -420,9 +519,10 @@ public sealed class AudioDownloadProcessor(
 
         var now = clock.GetUtcNow();
         var failures = job.Failures + 1;
-        var willRetry = retryable && failures < 3;
+        var willRetry = retryable && failures < options.Value.EffectiveMaxAttempts;
         var nextAttempt = willRetry
-            ? now.AddSeconds(Math.Pow(2, failures) + Random.Shared.NextDouble() * 2)
+            ? now.AddSeconds(Math.Min(options.Value.EffectiveMaxBackoffSeconds,
+                Math.Pow(2, failures) + Random.Shared.NextDouble() * 2))
             : job.NextAttemptAt;
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         // Acquire the job write lock first, matching cancellation's lock order. A stale

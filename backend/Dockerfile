@@ -7,9 +7,9 @@ RUN dotnet publish backend/src/TMusic.Api/TMusic.Api.csproj -c Release --no-rest
 RUN dotnet publish backend/src/TMusic.AdminCli/TMusic.AdminCli.csproj -c Release --no-restore -o /out-cli /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
-# Opt in at build time; runtime Features__EnableAudioDownloads remains a separate gate.
+# Audio dependencies are installed by default; the runtime feature flag remains a separate gate.
 # Noble supplies Python 3.12 and FFmpeg; the platform-independent yt-dlp needs Python >=3.11.
-ARG INSTALL_AUDIO_TOOLS=false
+ARG INSTALL_AUDIO_TOOLS=true
 ARG YT_DLP_VERSION=2026.10.26
 ARG YT_DLP_SHA256=e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3
 ARG DENO_VERSION=2.9.8
@@ -59,6 +59,8 @@ COPY --from=build /out-cli/ ./admin-cli/
 COPY --chmod=755 backend/tools/api-entrypoint.sh /usr/local/bin/tmusic-api-entrypoint
 RUN mkdir -p /data/audio /data/covers /data/keys && chown -R "$APP_UID":0 /data
 ENV ASPNETCORE_HTTP_PORTS=8080
+ENV AudioDownload__YtDlpVersion=${YT_DLP_VERSION}
+ENV AudioDownload__DenoVersion=${DENO_VERSION}
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/tmusic-api-entrypoint"]
 CMD ["dotnet", "TMusic.Api.dll"]

@@ -117,7 +117,6 @@ public sealed class ImportProcessor(TMusicDb db, IYouTubePlaylist youtube, IConf
             ?? throw new ProviderException("PREVIEW_EXPIRED");
         var snapshot = await db.ImportCandidates.AsNoTracking().Where(x => x.PreviewId == preview.Id).OrderBy(x => x.Position).ToListAsync(ct);
         if (preview.Checksum != job.Checksum || Checksum(snapshot) != job.Checksum) throw new ProviderException("PREVIEW_INTEGRITY_FAILED");
-        var boundary = "youtube:playlist:" + preview.PlaylistId;
         Album album;
         if (job.AlbumId is { } albumId)
             album = await db.Albums.SingleOrDefaultAsync(x => x.Id == albumId && x.OwnerId == job.OwnerId, ct)
@@ -128,8 +127,6 @@ public sealed class ImportProcessor(TMusicDb db, IYouTubePlaylist youtube, IConf
             db.Albums.Add(album);
             job.AlbumId = album.Id;
         }
-        if (album.SourceBoundary is not null && album.SourceBoundary != boundary) throw new ProviderException("SOURCE_COMBINATION_DISABLED");
-        album.SourceBoundary = boundary;
         album.UpdatedAt = now;
         if (db.Entry(album).State != EntityState.Added) db.Entry(album).Property(x => x.UpdatedAt).IsModified = true;
         var remaining = snapshot.Where(x => x.Status == "ACCEPTED" && x.Position > job.LastPosition).Take(BatchSize + 1).ToArray();

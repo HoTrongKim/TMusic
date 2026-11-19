@@ -40,10 +40,28 @@ class LocalLibrary {
         .create(recursive: true);
     final db = await openDatabase(
       '${dir.path}/index.db',
-      version: 1,
-      onCreate: (d, _) => d.execute(
-        'CREATE TABLE tracks (id TEXT PRIMARY KEY,title TEXT NOT NULL,path TEXT NOT NULL,created INTEGER NOT NULL)',
-      ),
+      version: 2,
+      onCreate: (d, _) async {
+        await d.execute(
+          'CREATE TABLE tracks (id TEXT PRIMARY KEY,title TEXT NOT NULL,path TEXT NOT NULL,created INTEGER NOT NULL)',
+        );
+        await d.execute(
+          'CREATE TABLE album_tracks (albumId TEXT NOT NULL,trackId TEXT NOT NULL,position INTEGER NOT NULL,PRIMARY KEY(albumId,trackId))',
+        );
+        await d.execute(
+          'CREATE INDEX idx_album_tracks_order ON album_tracks(albumId,position)',
+        );
+      },
+      onUpgrade: (d, oldVersion, _) async {
+        if (oldVersion < 2) {
+          await d.execute(
+            'CREATE TABLE album_tracks (albumId TEXT NOT NULL,trackId TEXT NOT NULL,position INTEGER NOT NULL,PRIMARY KEY(albumId,trackId))',
+          );
+          await d.execute(
+            'CREATE INDEX idx_album_tracks_order ON album_tracks(albumId,position)',
+          );
+        }
+      },
     );
     return LocalLibrary(dir, db);
   }
@@ -184,6 +202,76 @@ class LocalLibrary {
         .toList();
   }
 
+  Future<List<LocalTrack>> listAlbumTracks(String albumId) async {
+    final database = db;
+    if (database == null) return const [];
+    final rows = await database.rawQuery(
+      'SELECT tracks.id,tracks.title,tracks.path FROM album_tracks JOIN tracks ON tracks.id=album_tracks.trackId WHERE album_tracks.albumId=? ORDER BY album_tracks.position,tracks.id',
+      [albumId],
+    );
+    return rows
+        .map(
+          (row) => LocalTrack(
+            row['id'] as String,
+            row['title'] as String,
+            row['path'] as String,
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> addTrackToAlbum(String trackId, String albumId) async {
+    final database = db;
+    if (database == null) {
+      throw const FileSystemException('Local audio storage unavailable');
+    }
+    final present = await database.query(
+      'album_tracks',
+      columns: ['trackId'],
+      where: 'albumId=? AND trackId=?',
+      whereArgs: [albumId, trackId],
+      limit: 1,
+    );
+    if (present.isNotEmpty) return;
+    final maximum = await database.rawQuery(
+      'SELECT MAX(position) AS position FROM album_tracks WHERE albumId=?',
+      [albumId],
+    );
+    final position = (maximum.first['position'] as int?) ?? -1;
+    await database.insert('album_tracks', {
+      'albumId': albumId,
+      'trackId': trackId,
+      'position': position + 1,
+    });
+  }
+
+  Future<void> removeTrackFromAlbum(String trackId, String albumId) async {
+    await db?.delete(
+      'album_tracks',
+      where: 'albumId=? AND trackId=?',
+      whereArgs: [albumId, trackId],
+    );
+  }
+
+  Future<void> removeAlbumTracks(String albumId) async {
+    await db?.delete('album_tracks', where: 'albumId=?', whereArgs: [albumId]);
+  }
+
+  Future<void> reorderAlbumTracks(String albumId, List<String> trackIds) async {
+    final database = db;
+    if (database == null) return;
+    await database.transaction((transaction) async {
+      for (final (position, trackId) in trackIds.indexed) {
+        await transaction.update(
+          'album_tracks',
+          {'position': position},
+          where: 'albumId=? AND trackId=?',
+          whereArgs: [albumId, trackId],
+        );
+      }
+    });
+  }
+
   Future<void> importFile(XFile file) async {
     final dir = directory;
     final database = db;
@@ -228,6 +316,7 @@ class LocalLibrary {
   Future<void> remove(LocalTrack track) async {
     final file = File(track.path);
     if (await file.exists()) await file.delete();
+    await db?.delete('album_tracks', where: 'trackId=?', whereArgs: [track.id]);
     await db?.delete('tracks', where: 'id=?', whereArgs: [track.id]);
   }
 
@@ -452,11 +541,8 @@ class LocalAudio extends BaseAudioHandler with QueueHandler, SeekHandler {
     queue.add(currentQueue);
     if (wasPlayingTarget) {
       abLoop.value = null;
-      final nextIndex =
-          (p?.currentIndex ?? playbackState.value.queueIndex ?? 0).clamp(
-            0,
-            currentQueue.length - 1,
-          );
+      final nextIndex = (p?.currentIndex ?? playbackState.value.queueIndex ?? 0)
+          .clamp(0, currentQueue.length - 1);
       mediaItem.add(currentQueue[nextIndex]);
       if (p == null) {
         playbackState.add(

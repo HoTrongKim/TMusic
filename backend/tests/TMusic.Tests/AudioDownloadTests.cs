@@ -54,6 +54,23 @@ public sealed class AudioDownloadTests(SqlApiFixture fixture)
     }
 
     [Fact]
+    public void JavaScriptRuntimeIsExplicitAndOptional()
+    {
+        var withoutDeno = YtDlpAudioExtractor.BuildSafeArguments(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "ffmpeg", "track.media",
+            "http://tmusic:test@127.0.0.1:18234");
+        var withDeno = YtDlpAudioExtractor.BuildSafeArguments(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "ffmpeg", "track.media",
+            "http://tmusic:test@127.0.0.1:18234", OperatingSystem.IsWindows() ? @"C:\tools\deno.exe" : "/usr/local/bin/deno");
+
+        Assert.DoesNotContain("--js-runtimes", withoutDeno);
+        var runtimeIndex = withDeno.ToList().IndexOf("--js-runtimes");
+        Assert.True(runtimeIndex >= 0);
+        Assert.StartsWith("deno:", withDeno[runtimeIndex + 1]);
+        Assert.True(runtimeIndex < withDeno.ToList().IndexOf("--"));
+    }
+
+    [Fact]
     public void AudioStorageValidatesMp3HeadersAndRejectsArbitraryPayloads()
     {
         var config = new ConfigurationBuilder().Build();

@@ -29,6 +29,20 @@ public sealed class LocalAudioConversionTests
     }
 
     [FfmpegFact]
+    public async Task StartupValidationRunsYtDlpAndFfmpegAndChecksPinnedYtDlpVersion()
+    {
+        var extractor = new YtDlpAudioExtractor(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Features:EnableAudioDownloads"] = "true",
+                ["AudioDownload:YtDlpVersion"] = "2026.10.26"
+            }).Build());
+
+        Assert.True(await extractor.ValidateToolsAsync(CancellationToken.None),
+            $"yt-dlp path: {extractor.ResolveYtDlpPath()}; FFmpeg path: {extractor.ResolveFfmpegPath()}");
+    }
+
+    [FfmpegFact]
     public async Task GeneratedWavConvertsToValidatedMp3WithoutExternalProbe()
     {
         var directory = Path.Combine(Path.GetTempPath(), "TMusicConversionTest_" + Guid.NewGuid().ToString("N"));
