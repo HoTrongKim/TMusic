@@ -14,6 +14,9 @@ public sealed class Song
     public DateTimeOffset? MetadataFetchedAt { get; set; }
     public DateTimeOffset? MetadataExpiresAt { get; set; }
     public string PlaybackCapability { get; set; } = "EXTERNAL_OPEN_ONLY";
+    public string ModerationStatus { get; set; } = "ACTIVE";
+    public string? ModerationReason { get; set; }
+    public DateTimeOffset? ModeratedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 

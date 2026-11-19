@@ -39,7 +39,7 @@ public static class ExternalAuthEndpoints
         var account=await users.FindByLoginAsync(provider,identity.Subject);
         if (account is not null)
         {
-            if (await users.IsLockedOutAsync(account)) return ApiSupport.Problem("INVALID_EXTERNAL_TOKEN",401);
+            if (account.DeletedAt is not null || account.IsCurrentlySuspended(clock.GetUtcNow()) || await users.IsLockedOutAsync(account)) return ApiSupport.Problem("INVALID_EXTERNAL_TOKEN",401);
             if (!await db.UserAuthProviders.AnyAsync(x=>x.Provider==provider && x.ProviderSubject==identity.Subject,ct))
                 db.UserAuthProviders.Add(new UserAuthProvider { UserId=account.Id,Provider=provider,ProviderSubject=identity.Subject,LinkedAt=clock.GetUtcNow() });
             if (encrypted is not null) await users.SetAuthenticationTokenAsync(account,"apple","refresh",encrypted);

@@ -9,11 +9,14 @@ public sealed record SanitizedCover(byte[] Bytes, string Extension, string Conte
 
 public interface ICoverImageStorage
 {
+    string StorageRootPath { get; }
     SanitizedCover InspectAndSanitize(ReadOnlySpan<byte> input);
     Task<string> SaveAsync(Guid userId, ReadOnlyMemory<byte> rawBytes, CancellationToken ct);
     Task<(Stream Stream, string ContentType)?> OpenReadAsync(Guid userId, string fileName, CancellationToken ct);
     void DeleteCoverUrl(Guid userId, string? coverImageUrl);
     void DeleteUserCovers(Guid userId);
+    IReadOnlyList<StoredFileEntry> ListAllFiles();
+    bool QuarantineFile(Guid userId, string fileName);
 }
 
 public sealed partial class CoverImageStorage(IConfiguration config) : ICoverImageStorage
@@ -27,6 +30,8 @@ public sealed partial class CoverImageStorage(IConfiguration config) : ICoverIma
     private string RootPath => config["Storage:CoversPath"] is { Length: > 0 } configured
         ? Path.GetFullPath(configured)
         : Path.Combine(AppContext.BaseDirectory, "App_Data", "covers");
+
+    public string StorageRootPath => RootPath;
 
     public static string? ExtractOwnedFileName(Guid userId, string? coverImageUrl)
     {
@@ -90,6 +95,51 @@ public sealed partial class CoverImageStorage(IConfiguration config) : ICoverIma
         if (Directory.Exists(userDir))
         {
             try { Directory.Delete(userDir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    public IReadOnlyList<StoredFileEntry> ListAllFiles()
+    {
+        var result = new List<StoredFileEntry>();
+        if (!Directory.Exists(RootPath)) return result;
+        foreach (var dir in Directory.EnumerateDirectories(RootPath))
+        {
+            var folderName = Path.GetFileName(dir);
+            if (string.Equals(folderName, "_quarantine", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Guid.TryParseExact(folderName, "N", out var userId)) continue;
+            foreach (var filePath in Directory.EnumerateFiles(dir))
+            {
+                var fileName = Path.GetFileName(filePath);
+                if (!SafeFilePattern().IsMatch(fileName)) continue;
+                try
+                {
+                    var fi = new FileInfo(filePath);
+                    result.Add(new StoredFileEntry(userId, fileName, fi.Length, fi.LastWriteTimeUtc));
+                }
+                catch (IOException) { }
+            }
+        }
+        return result;
+    }
+
+    public bool QuarantineFile(Guid userId, string fileName)
+    {
+        if (!SafeFilePattern().IsMatch(fileName)) return false;
+        var userDir = Path.GetFullPath(Path.Combine(RootPath, userId.ToString("N")));
+        var fullPath = Path.GetFullPath(Path.Combine(userDir, fileName));
+        if (!fullPath.StartsWith(userDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+            return false;
+        var quarantineDir = Path.GetFullPath(Path.Combine(RootPath, "_quarantine", userId.ToString("N")));
+        Directory.CreateDirectory(quarantineDir);
+        var destPath = Path.GetFullPath(Path.Combine(quarantineDir, fileName));
+        try
+        {
+            File.Move(fullPath, destPath, overwrite: true);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
         }
     }
 

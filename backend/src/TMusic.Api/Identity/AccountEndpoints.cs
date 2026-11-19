@@ -91,20 +91,22 @@ public static class AccountEndpoints
         return Results.Created("/api/v1/users/me", session);
     }
 
-    private static async Task<IResult> Login(LoginRequest r, UserManager<Account> users, SignInManager<Account> signIn, IPasswordHasher<Account> hash, SessionService sessions, CancellationToken ct)
+    private static async Task<IResult> Login(LoginRequest r, UserManager<Account> users, SignInManager<Account> signIn, IPasswordHasher<Account> hash, SessionService sessions, TimeProvider clock, CancellationToken ct)
     {
         if (!ValidEmail(r.Email) || r.Password is not { Length: > 0 and <= 128 }) return ApiSupport.Problem("INVALID_CREDENTIALS", 401);
         if (!sessions.IsConfigured) return ApiSupport.Problem("AUTH_UNAVAILABLE", 503);
         var account = await users.FindByEmailAsync(r.Email!.Trim());
-        if (account is null)
+        if (account is null || account.DeletedAt is not null)
         {
             hash.HashPassword(new Account(), r.Password);
             return ApiSupport.Problem("INVALID_CREDENTIALS", 401);
         }
         var result = await signIn.CheckPasswordSignInAsync(account, r.Password, lockoutOnFailure: true);
-        return result.Succeeded
-            ? Results.Ok(await sessions.Create(account.Id, r.DeviceName, ct))
-            : ApiSupport.Problem("INVALID_CREDENTIALS", 401, "Email hoặc mật khẩu chưa đúng, hoặc tài khoản đang tạm khóa.");
+        if (!result.Succeeded)
+            return ApiSupport.Problem("INVALID_CREDENTIALS", 401, "Email hoặc mật khẩu chưa đúng, hoặc tài khoản đang tạm khóa.");
+        if (account.IsCurrentlySuspended(clock.GetUtcNow()))
+            return ApiSupport.Problem("ACCOUNT_SUSPENDED", 403, "Tài khoản đang bị tạm khóa.");
+        return Results.Ok(await sessions.Create(account.Id, r.DeviceName, ct));
     }
 
     private static async Task<IResult> SendResetCode(EmailRequest r, UserManager<Account> users, IAccountMailSender mail, CancellationToken ct)
@@ -187,10 +189,12 @@ public static class AccountEndpoints
         return (await users.UpdateAsync(account)).Succeeded ? await Profile(principal, users, db, ct) : ApiSupport.Problem("CONCURRENT_MODIFICATION", 409);
     }
 
-    private static async Task<IResult> DeleteAccount(HttpRequest request, ClaimsPrincipal principal, UserManager<Account> users, SignInManager<Account> signIn, TMusicDb db, AppleTokens apple, ICoverImageStorage covers, IAudioStorage audio, TimeProvider clock, CancellationToken ct)
+    private static async Task<IResult> DeleteAccount(HttpRequest request, ClaimsPrincipal principal, UserManager<Account> users, SignInManager<Account> signIn, TMusicDb db, TMusic.Api.Admin.AdminPermissionService adminPerms, AppleTokens apple, ICoverImageStorage covers, IAudioStorage audio, TimeProvider clock, CancellationToken ct)
     {
         var account = await users.FindByIdAsync(ApiSupport.UserId(principal).ToString());
         if (account is null) return Results.NoContent();
+        if (await adminPerms.IsLastSuperAdminAsync(account.Id, ct))
+            return ApiSupport.Problem("LAST_SUPERADMIN_PROTECTED", 409, "Không thể tự xóa tài khoản SuperAdmin cuối cùng của hệ thống.");
         DeleteRequest? body = request.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true ? await request.ReadFromJsonAsync<DeleteRequest>(ct) : null;
         if (await users.HasPasswordAsync(account))
         {

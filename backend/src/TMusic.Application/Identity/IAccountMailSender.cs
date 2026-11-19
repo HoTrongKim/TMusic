@@ -2,7 +2,8 @@ namespace TMusic.Application.Identity;
 
 public enum AccountCodePurpose
 {
-    ResetPassword
+    ResetPassword,
+    AdminInvitation
 }
 
 public interface IAccountMailSender

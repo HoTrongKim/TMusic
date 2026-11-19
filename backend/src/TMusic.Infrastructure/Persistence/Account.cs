@@ -5,9 +5,16 @@ public sealed class Account : IdentityUser<Guid>
 {
     public string DisplayName { get; set; } = "";
     public string? AvatarUrl { get; set; }
+    public bool IsSuspended { get; set; }
+    public DateTimeOffset? SuspendedUntil { get; set; }
+    public string? SuspensionReason { get; set; }
+    public DateTimeOffset? LastActiveAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? DeletedAt { get; set; }
+
+    public bool IsCurrentlySuspended(DateTimeOffset now) =>
+        IsSuspended && (SuspendedUntil is null || SuspendedUntil > now);
 }
 
 public sealed class UserAuthProvider
@@ -26,9 +33,12 @@ public sealed class UserSession
     public Guid FamilyId { get; set; }
     public required string RefreshTokenHash { get; set; }
     public required string DeviceName { get; set; }
+    public bool IsAdminSession { get; set; }
+    public bool MfaVerified { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset AuthenticatedAt { get; set; }
+    public DateTimeOffset? LastSeenAt { get; set; }
     public DateTimeOffset? RotatedAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
     public byte[] Version { get; set; } = [];

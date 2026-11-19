@@ -56,6 +56,8 @@ public sealed class SqlApiFixture : IAsyncLifetime
                 ["Storage:AudioPath"] = AudioPath,
                 ["Auth:SigningKey"] = "INTEGRATION-TEST-ONLY-NONPRODUCTION-KEY-2026-11-17",
                 ["Auth:Jwt:SigningKey"] = "INTEGRATION-TEST-ONLY-NONPRODUCTION-KEY-2026-11-17",
+                ["RateLimits:AdminAuthPermitLimit"] = "1000",
+                ["RateLimits:AdminApiPermitLimit"] = "1000",
                 ["RateLimits:AuthPermitLimit"] = "1000",
                 ["RateLimits:ProviderPermitLimit"] = "1000",
                 ["YouTube:ApiKey"] = "fixture-only",

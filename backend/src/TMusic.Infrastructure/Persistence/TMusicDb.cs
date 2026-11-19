@@ -16,6 +16,7 @@ public sealed partial class TMusicDb(DbContextOptions<TMusicDb> options) : Ident
     public DbSet<UserSettings> UserSettings => Set<UserSettings>();
     public DbSet<ExternalChallenge> ExternalChallenges => Set<ExternalChallenge>();
     partial void ConfigureImports(ModelBuilder builder);
+    partial void ConfigureAdmin(ModelBuilder builder);
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -108,6 +109,7 @@ public sealed partial class TMusicDb(DbContextOptions<TMusicDb> options) : Ident
                 .HasPrincipalKey(x => new { x.Id, x.OwnerId }).OnDelete(DeleteBehavior.Cascade);
         });
         ConfigureImports(builder);
+        ConfigureAdmin(builder);
     }
 }
 

@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
+using TMusic.Api.Admin;
 using TMusic.Api.Downloads;
 using TMusic.Api.Identity;
 using TMusic.Api.Library;
@@ -39,7 +40,7 @@ builder.Services.AddIdentityCore<Account>(options=> {
     options.Password.RequiredLength=12; options.Password.RequireUppercase=true; options.Password.RequireLowercase=true;
     options.Password.RequireDigit=true; options.Password.RequireNonAlphanumeric=true;
     options.Lockout.MaxFailedAccessAttempts=5; options.Lockout.DefaultLockoutTimeSpan=TimeSpan.FromMinutes(15);
-}).AddEntityFrameworkStores<TMusicDb>().AddSignInManager().AddDefaultTokenProviders();
+}).AddRoles<IdentityRole<Guid>>().AddEntityFrameworkStores<TMusicDb>().AddSignInManager().AddDefaultTokenProviders();
 builder.Services.Configure<DataProtectionTokenProviderOptions>(options=>options.TokenLifespan=TimeSpan.FromHours(1));
 var protection=builder.Services.AddDataProtection().SetApplicationName("TMusic.V2");
 if (builder.Configuration["DataProtection:KeyPath"] is { Length: >0 } keyPath) protection.PersistKeysToFileSystem(new DirectoryInfo(keyPath));
@@ -64,26 +65,69 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
         ValidIssuer=SessionService.Issuer(config),ValidAudience=SessionService.Audience(config),ClockSkew=TimeSpan.FromSeconds(15),
         ValidAlgorithms=[SecurityAlgorithms.HmacSha256],IssuerSigningKeyResolver=(_,_,_,_)=>SessionService.SigningKey(config) is { } key?[key]:[]
     };
-    options.Events=new JwtBearerEvents { OnTokenValidated=async context=> {
-        if (!Guid.TryParse(context.Principal?.FindFirstValue("sub"),out var user) || !Guid.TryParse(context.Principal.FindFirstValue("sid"),out var family)) { context.Fail("Invalid session."); return; }
-        var db=context.HttpContext.RequestServices.GetRequiredService<TMusicDb>();
-        var time=context.HttpContext.RequestServices.GetRequiredService<TimeProvider>().GetUtcNow();
-        if (!await db.UserSessions.AnyAsync(s=>s.UserId==user && s.FamilyId==family && s.RevokedAt==null && s.RotatedAt==null && s.ExpiresAt>time,context.HttpContext.RequestAborted)) context.Fail("Session unavailable.");
-    }};
+    options.Events=new JwtBearerEvents {
+        OnMessageReceived=context=> {
+            if (string.IsNullOrEmpty(context.Token) &&
+                string.IsNullOrEmpty(context.Request.Headers.Authorization) &&
+                context.Request.Path.StartsWithSegments("/api/admin") &&
+                context.Request.Cookies.TryGetValue(AdminAuthConstants.AccessCookieName, out var cookieToken) &&
+                !string.IsNullOrWhiteSpace(cookieToken))
+            {
+                context.Token=cookieToken;
+                context.HttpContext.Items[AdminAuthConstants.AuthViaCookieItemKey]=true;
+            }
+            return Task.CompletedTask;
+        },
+        OnTokenValidated=async context=> {
+            if (!Guid.TryParse(context.Principal?.FindFirstValue("sub"),out var user) || !Guid.TryParse(context.Principal.FindFirstValue("sid"),out var family)) { context.Fail("Invalid session."); return; }
+            var db=context.HttpContext.RequestServices.GetRequiredService<TMusicDb>();
+            var time=context.HttpContext.RequestServices.GetRequiredService<TimeProvider>().GetUtcNow();
+            var ct=context.HttpContext.RequestAborted;
+            if (!await db.UserSessions.AnyAsync(s=>s.UserId==user && s.FamilyId==family && s.RevokedAt==null && s.RotatedAt==null && s.ExpiresAt>time,ct)) { context.Fail("Session unavailable."); return; }
+            var activeAccount=await db.Users.AsNoTracking().AnyAsync(u=>u.Id==user && u.DeletedAt==null && (!u.IsSuspended || (u.SuspendedUntil!=null && u.SuspendedUntil<=time)),ct);
+            if (!activeAccount) context.Fail("Account unavailable.");
+        }
+    };
 });
-builder.Services.AddAuthorization();
+builder.Services.AddAdminAuthorization();
+var adminCorsOrigins=(builder.Configuration["Cors:AdminOrigins"]??"")
+    .Split([',',';',' '],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+    .Concat(builder.Configuration.GetSection("Cors:AdminOrigins").Get<string[]>()??[])
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
+builder.Services.AddCors(options=> {
+    options.AddPolicy("AdminWeb",policy=> {
+        if (adminCorsOrigins.Length>0)
+            policy.WithOrigins(adminCorsOrigins).AllowCredentials().WithHeaders("Content-Type","Authorization",AdminAuthConstants.CsrfHeaderName,"If-Match").WithMethods("GET","POST","PUT","PATCH","DELETE","OPTIONS");
+        else if (builder.Environment.IsDevelopment())
+            policy.WithOrigins("http://localhost:5173","http://127.0.0.1:5173","http://localhost:4173").AllowCredentials().WithHeaders("Content-Type","Authorization",AdminAuthConstants.CsrfHeaderName,"If-Match").WithMethods("GET","POST","PUT","PATCH","DELETE","OPTIONS");
+    });
+});
 builder.Services.AddRateLimiter(options=> {
     options.RejectionStatusCode=429;
     options.OnRejected=async (context,ct)=>await context.HttpContext.Response.WriteAsJsonAsync(new {type="about:blank",title="RATE_LIMITED",status=429,code="RATE_LIMITED"},ct);
     options.AddPolicy("auth",context=>RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString()??"unknown",
         _=>new FixedWindowRateLimiterOptions { PermitLimit=builder.Configuration.GetValue("RateLimits:AuthPermitLimit",30),Window=TimeSpan.FromMinutes(1),QueueLimit=0 }));
+    options.AddPolicy("admin-auth",context=>RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString()??"unknown",
+        _=>new FixedWindowRateLimiterOptions { PermitLimit=builder.Configuration.GetValue("RateLimits:AdminAuthPermitLimit",15),Window=TimeSpan.FromMinutes(1),QueueLimit=0 }));
+    options.AddPolicy("admin-api",context=>RateLimitPartition.GetFixedWindowLimiter(context.User.FindFirstValue("sub")??context.Connection.RemoteIpAddress?.ToString()??"unknown",
+        _=>new FixedWindowRateLimiterOptions { PermitLimit=builder.Configuration.GetValue("RateLimits:AdminApiPermitLimit",180),Window=TimeSpan.FromMinutes(1),QueueLimit=0 }));
     options.AddPolicy("provider",context=>RateLimitPartition.GetFixedWindowLimiter(context.User.FindFirstValue("sub")??context.Connection.RemoteIpAddress?.ToString()??"unknown",
         _=>new FixedWindowRateLimiterOptions { PermitLimit=builder.Configuration.GetValue("RateLimits:ProviderPermitLimit",30),Window=TimeSpan.FromMinutes(1),QueueLimit=0 }));
 });
 var app=builder.Build();
 app.UseExceptionHandler(); app.UseStatusCodePages();
-app.Use(async (context,next)=> { context.Response.Headers["X-Correlation-ID"]=context.TraceIdentifier; context.Response.Headers["X-Content-Type-Options"]="nosniff"; context.Response.Headers.CacheControl="no-store"; await next(); });
+app.Use(async (context,next)=> {
+    context.Response.Headers["X-Correlation-ID"]=context.TraceIdentifier;
+    context.Response.Headers["X-Content-Type-Options"]="nosniff";
+    context.Response.Headers["X-Frame-Options"]="DENY";
+    context.Response.Headers["Referrer-Policy"]="no-referrer";
+    context.Response.Headers["Permissions-Policy"]="camera=(), microphone=(), geolocation=()";
+    context.Response.Headers.CacheControl="no-store";
+    await next();
+});
 if (!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing")) { app.UseHsts(); app.UseHttpsRedirection(); }
+app.UseCors();
 app.UseAuthentication(); app.UseRateLimiter(); app.UseAuthorization();
 if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing")) app.MapOpenApi();
 app.MapHealthChecks("/health",new HealthCheckOptions {Predicate=_=>false});
@@ -98,6 +142,13 @@ api.MapGet("/system/capabilities",(IExternalTokenVerifier verifier,IAccountMailS
 }));
 api.MapAccountEndpoints(); api.MapExternalAuthEndpoints(); api.MapAlbumEndpoints(); api.MapSongEndpoints();
 api.MapAudioDownloadEndpoints(); api.MapProviderEndpoints(); api.MapImportEndpoints();
+var admin=app.MapGroup("/api/admin").RequireCors("AdminWeb").RequireRateLimiting("admin-api");
+admin.MapAdminAuthEndpoints();
+admin.MapAdminDashboardEndpoints();
+admin.MapAdminUsersEndpoints();
+admin.MapAdminContentEndpoints();
+admin.MapAdminOperationsEndpoints();
+admin.MapAdminSystemEndpoints();
 app.Run();
 public partial class Program { }
 public sealed class ApiDownloadBackgroundRunner(IServiceScopeFactory scopes,IConfiguration config,IAudioExtractor extractor,ILogger<ApiDownloadBackgroundRunner> logger) : BackgroundService
@@ -160,6 +211,19 @@ public sealed class ApiExceptionHandler(IProblemDetailsService details,ILogger<A
             _=>(500,"INTERNAL_ERROR")
         };
         logger.LogWarning("Request failed with {ErrorType}; correlation {Correlation}",error.GetType().Name,context.TraceIdentifier);
+        if (status >= 500)
+        {
+            try
+            {
+                var audit = context.RequestServices.GetService<AdminAuditService>();
+                if (audit is not null)
+                {
+                    var evType = error is Microsoft.Data.SqlClient.SqlException or DbUpdateException ? "DB_ERROR" : "API_ERROR";
+                    await audit.RecordSystemEventAsync("ERROR", evType, code, $"Lỗi xử lý yêu cầu ({error.GetType().Name}).", null, new { path = context.Request.Path.Value }, CancellationToken.None);
+                }
+            }
+            catch { /* Best-effort telemetry; never mask primary error response */ }
+        }
         context.Response.StatusCode=status;
         return await details.TryWriteAsync(new ProblemDetailsContext {HttpContext=context,ProblemDetails=new() {
             Status=status,Title=code,Extensions={["code"]=code,["traceId"]=context.TraceIdentifier}

@@ -2,7 +2,9 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
 WORKDIR /src
 COPY backend/ ./backend/
 RUN dotnet restore backend/src/TMusic.Api/TMusic.Api.csproj
+RUN dotnet restore backend/src/TMusic.AdminCli/TMusic.AdminCli.csproj
 RUN dotnet publish backend/src/TMusic.Api/TMusic.Api.csproj -c Release --no-restore -o /out /p:UseAppHost=false
+RUN dotnet publish backend/src/TMusic.AdminCli/TMusic.AdminCli.csproj -c Release --no-restore -o /out-cli /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
 # Opt in at build time; runtime Features__EnableAudioDownloads remains a separate gate.
@@ -53,6 +55,7 @@ RUN if [ "$INSTALL_AUDIO_TOOLS" = true ]; then \
     fi
 WORKDIR /app
 COPY --from=build /out/ ./
+COPY --from=build /out-cli/ ./admin-cli/
 COPY --chmod=755 backend/tools/api-entrypoint.sh /usr/local/bin/tmusic-api-entrypoint
 RUN mkdir -p /data/audio /data/covers /data/keys && chown -R "$APP_UID":0 /data
 ENV ASPNETCORE_HTTP_PORTS=8080

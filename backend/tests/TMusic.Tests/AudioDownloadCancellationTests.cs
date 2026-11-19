@@ -138,7 +138,10 @@ public sealed class AudioDownloadCancellationTests(SqlApiFixture fixture)
         }
         public Task<StoredAudio> SaveBytesAsync(Guid userId, ReadOnlyMemory<byte> bytes, CancellationToken ct) => inner.SaveBytesAsync(userId, bytes, ct);
         public Task<(Stream Stream, long Length)?> OpenReadAsync(Guid userId, string fileName, CancellationToken ct) => inner.OpenReadAsync(userId, fileName, ct);
+        public string StorageRootPath => inner.StorageRootPath;
         public void DeleteAudioFile(Guid userId, string? fileName) => inner.DeleteAudioFile(userId, fileName);
         public void DeleteUserAudio(Guid userId) => inner.DeleteUserAudio(userId);
+        public IReadOnlyList<StoredFileEntry> ListAllFiles() => inner.ListAllFiles();
+        public bool QuarantineFile(Guid userId, string fileName) => inner.QuarantineFile(userId, fileName);
     }
 }

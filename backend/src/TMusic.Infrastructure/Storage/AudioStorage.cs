@@ -4,15 +4,19 @@ using Microsoft.Extensions.Configuration;
 namespace TMusic.Infrastructure.Storage;
 
 public sealed record StoredAudio(string FileName, long SizeBytes);
+public sealed record StoredFileEntry(Guid UserId, string FileName, long SizeBytes, DateTimeOffset LastModifiedUtc);
 
 public interface IAudioStorage
 {
+    string StorageRootPath { get; }
     bool IsValidMp3Header(ReadOnlySpan<byte> header);
     Task<StoredAudio> SaveFromTempFileAsync(Guid userId, string tempFilePath, CancellationToken ct);
     Task<StoredAudio> SaveBytesAsync(Guid userId, ReadOnlyMemory<byte> mp3Bytes, CancellationToken ct);
     Task<(Stream Stream, long Length)?> OpenReadAsync(Guid userId, string fileName, CancellationToken ct);
     void DeleteAudioFile(Guid userId, string? fileName);
     void DeleteUserAudio(Guid userId);
+    IReadOnlyList<StoredFileEntry> ListAllFiles();
+    bool QuarantineFile(Guid userId, string fileName);
 }
 
 public sealed partial class AudioStorage(IConfiguration config) : IAudioStorage
@@ -28,6 +32,8 @@ public sealed partial class AudioStorage(IConfiguration config) : IAudioStorage
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "TMusicV2",
             "audio");
+
+    public string StorageRootPath => RootPath;
 
     public bool IsValidMp3Header(ReadOnlySpan<byte> header)
     {
@@ -117,6 +123,51 @@ public sealed partial class AudioStorage(IConfiguration config) : IAudioStorage
         if (Directory.Exists(userDir))
         {
             try { Directory.Delete(userDir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    public IReadOnlyList<StoredFileEntry> ListAllFiles()
+    {
+        var result = new List<StoredFileEntry>();
+        if (!Directory.Exists(RootPath)) return result;
+        foreach (var dir in Directory.EnumerateDirectories(RootPath))
+        {
+            var folderName = Path.GetFileName(dir);
+            if (string.Equals(folderName, "_quarantine", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Guid.TryParseExact(folderName, "N", out var userId)) continue;
+            foreach (var filePath in Directory.EnumerateFiles(dir))
+            {
+                var fileName = Path.GetFileName(filePath);
+                if (!SafeFilePattern().IsMatch(fileName)) continue;
+                try
+                {
+                    var fi = new FileInfo(filePath);
+                    result.Add(new StoredFileEntry(userId, fileName, fi.Length, fi.LastWriteTimeUtc));
+                }
+                catch (IOException) { }
+            }
+        }
+        return result;
+    }
+
+    public bool QuarantineFile(Guid userId, string fileName)
+    {
+        if (!SafeFilePattern().IsMatch(fileName)) return false;
+        var userDir = Path.GetFullPath(Path.Combine(RootPath, userId.ToString("N")));
+        var fullPath = Path.GetFullPath(Path.Combine(userDir, fileName));
+        if (!fullPath.StartsWith(userDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+            return false;
+        var quarantineDir = Path.GetFullPath(Path.Combine(RootPath, "_quarantine", userId.ToString("N")));
+        Directory.CreateDirectory(quarantineDir);
+        var destPath = Path.GetFullPath(Path.Combine(quarantineDir, fileName));
+        try
+        {
+            File.Move(fullPath, destPath, overwrite: true);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
         }
     }
 }
