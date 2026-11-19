@@ -23,7 +23,7 @@ public static class Program
         }
 
         var command = args[0].Trim().ToLowerInvariant();
-        if (command is not ("create-superadmin" or "status"))
+        if (command is not ("create-superadmin" or "status" or "migrate"))
         {
             Console.Error.WriteLine($"Unknown command: {args[0]}");
             PrintUsage();
@@ -82,6 +82,23 @@ public static class Program
         {
             Console.Error.WriteLine("ERROR: Unable to connect to SQL Server database.");
             return 1;
+        }
+
+        if (command == "migrate")
+        {
+            var pendingBefore = (await db.Database.GetPendingMigrationsAsync()).ToList();
+            if (pendingBefore.Count > 0)
+            {
+                Console.WriteLine($"Applying {pendingBefore.Count} pending migration(s) to {sqlBuilder.InitialCatalog}: {string.Join(", ", pendingBefore)}");
+                await db.Database.MigrateAsync();
+            }
+            else
+            {
+                Console.WriteLine($"Database {sqlBuilder.InitialCatalog} is already up to date.");
+            }
+            await EnsureRolesSeededAsync(roleManager);
+            Console.WriteLine($"Roles verified: {string.Join(", ", AdminRoles.All)}");
+            return 0;
         }
 
         var pending = (await db.Database.GetPendingMigrationsAsync()).ToList();
@@ -325,6 +342,7 @@ public static class Program
         Console.WriteLine("TMusic Admin Bootstrap CLI");
         Console.WriteLine("Usage:");
         Console.WriteLine("  dotnet run --project backend/src/TMusic.AdminCli -- create-superadmin [--email <email>] [--display-name <name>] [--password-stdin]");
+        Console.WriteLine("  dotnet run --project backend/src/TMusic.AdminCli -- migrate");
         Console.WriteLine("  dotnet run --project backend/src/TMusic.AdminCli -- status");
         Console.WriteLine("Environment:");
         Console.WriteLine("  ConnectionStrings__DefaultConnection (or ConnectionStrings__TMusic)");
