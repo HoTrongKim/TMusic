@@ -22,6 +22,20 @@ public sealed class AudioDownloadQueueRunnerTests
         => Assert.Equal(expected, new AudioDownloadOptions { MaxAttempts = configured }.EffectiveMaxAttempts);
 
     [Fact]
+    public void DownloadAndConversionTimeoutsAreSeparatedAndCoveredByLease()
+    {
+        var defaults = new AudioDownloadOptions();
+        Assert.Equal(TimeSpan.FromSeconds(300), defaults.EffectiveTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(240), defaults.EffectiveConversionTimeout);
+        Assert.True(defaults.EffectiveLease >= defaults.EffectiveTimeout + defaults.EffectiveConversionTimeout + TimeSpan.FromSeconds(120));
+
+        var custom = new AudioDownloadOptions { TimeoutSeconds = 420, ConversionTimeoutSeconds = 300, LeaseSeconds = 200 };
+        Assert.Equal(TimeSpan.FromSeconds(420), custom.EffectiveTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(300), custom.EffectiveConversionTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(840), custom.EffectiveLease);
+    }
+
+    [Fact]
     public async Task RunnerExecutesJobsConcurrentlyWithoutExceedingConfiguredSlots()
     {
         var next = 0;

@@ -34,6 +34,13 @@ public static class AudioBitrate
 
 public static class LocalMp3Converter
 {
+    /// <summary>
+    /// Maximum allowed size for the temporary downloaded source media container before FFmpeg
+    /// extracts audio. Separated from <see cref="AudioStorage.MaxAudioBytes"/> (100 MB MP3 cap)
+    /// so long muxed video sources (e.g., TikTok long videos) can be converted to MP3 safely.
+    /// </summary>
+    public const long MaxInputMediaBytes = 300L * 1024 * 1024;
+
     public static async Task ConvertAsync(string ffmpegExecutable, string sourceFile, string outputFile,
         CancellationToken ct, int? bitrateKbps = null, TimeSpan? timeout = null)
     {
@@ -42,7 +49,7 @@ public static class LocalMp3Converter
         sourceFile = Path.GetFullPath(sourceFile);
         outputFile = Path.GetFullPath(outputFile);
         if (string.Equals(sourceFile, outputFile, StringComparison.OrdinalIgnoreCase) ||
-            !File.Exists(sourceFile) || new FileInfo(sourceFile).Length is <= 16 or > AudioStorage.MaxAudioBytes)
+            !File.Exists(sourceFile) || new FileInfo(sourceFile).Length is <= 16 or > MaxInputMediaBytes)
             throw new ProviderException("AUDIO_INPUT_INVALID");
 
         // No ffprobe or yt-dlp postprocessor handles downloaded bytes. Restrict both protocols
@@ -52,7 +59,7 @@ public static class LocalMp3Converter
         var qualityValue = bitrateKbps is { } b ? $"{b}k" : "2";
         var result = await BoundedAudioProcess.RunAsync(ffmpegExecutable,
         [
-            "-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864",
+            "-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "134217728",
             "-protocol_whitelist", "file,pipe",
             "-format_whitelist", "mov,matroska,webm,mpegts,mp3,aac,ogg,flac,wav",
             "-probesize", "5242880", "-analyzeduration", "5000000", "-threads", "2",
@@ -120,10 +127,14 @@ public static class BoundedAudioProcess
         }
     }
 
+    private const int MaxCapturedOutputChars = 128 * 1024;
+    private const int MaxStreamedOutputChars = 16 * 1024 * 1024;
+
     private static async Task<string> ReadAsync(StreamReader reader, bool capture, Func<string, Task>? onLine, CancellationTokenSource stop)
     {
         var captured = capture ? new StringBuilder() : null;
         var line = onLine is not null ? new StringBuilder() : null;
+        var maxChars = !capture && onLine is not null ? MaxStreamedOutputChars : MaxCapturedOutputChars;
         var buffer = new char[2048];
         var total = 0;
         try
@@ -133,7 +144,7 @@ public static class BoundedAudioProcess
                 var read = await reader.ReadAsync(buffer.AsMemory(), stop.Token);
                 if (read == 0) break;
                 total += read;
-                if (total > 128 * 1024) throw new ProviderException("AUDIO_ENGINE_OUTPUT_LIMIT");
+                if (total > maxChars) throw new ProviderException("AUDIO_ENGINE_OUTPUT_LIMIT");
                 captured?.Append(buffer, 0, read);
                 if (line is null) continue;
                 for (var i = 0; i < read; i++)

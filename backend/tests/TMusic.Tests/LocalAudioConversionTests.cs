@@ -117,6 +117,38 @@ public sealed class LocalAudioConversionTests
         Assert.Equal("AUDIO_ENGINE_OUTPUT_LIMIT", error.Code);
     }
 
+    [FfmpegFact]
+    public async Task StreamedProgressConsumerHandlesOutputLargerThanCaptureBufferLimit()
+    {
+        var lines = 0;
+        var totalChars = 0;
+        var result = await BoundedAudioProcess.RunAsync(Ffmpeg(),
+            ["-hide_banner", "-h", "full"],
+            Path.GetTempPath(),
+            line =>
+            {
+                lines++;
+                totalChars += line.Length;
+                return Task.CompletedTask;
+            },
+            CancellationToken.None,
+            TimeSpan.FromSeconds(15),
+            captureStandardOutput: false);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(totalChars > 128 * 1024, $"Expected > 128 KB streamed output, got {totalChars} chars.");
+        Assert.True(lines > 100);
+        Assert.Equal(string.Empty, result.StandardOutput);
+    }
+
+    [Fact]
+    public void InputMediaSizeLimitIsSeparatedFromFinalMp3StorageLimit()
+    {
+        Assert.Equal(300L * 1024 * 1024, LocalMp3Converter.MaxInputMediaBytes);
+        Assert.Equal(100L * 1024 * 1024, AudioStorage.MaxAudioBytes);
+        Assert.True(LocalMp3Converter.MaxInputMediaBytes > AudioStorage.MaxAudioBytes);
+    }
+
     [Fact]
     public async Task ExistingInvalidExecutableReturnsSanitizedEngineFailure()
     {

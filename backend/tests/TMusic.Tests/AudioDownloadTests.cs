@@ -40,6 +40,10 @@ public sealed class AudioDownloadTests(SqlApiFixture fixture)
         Assert.DoesNotContain("--audio-format", args);
         Assert.DoesNotContain("--postprocessor-args", args);
         Assert.Contains("bestaudio/best", args);
+        Assert.Contains("--max-filesize", args);
+        Assert.Contains("300M", args);
+        Assert.Contains("--progress-delta", args);
+        Assert.DoesNotContain("--format-sort", args);
         Assert.Contains("--fixup", args);
         Assert.Contains("never", args);
 
@@ -68,6 +72,39 @@ public sealed class AudioDownloadTests(SqlApiFixture fixture)
         Assert.True(runtimeIndex >= 0);
         Assert.StartsWith("deno:", withDeno[runtimeIndex + 1]);
         Assert.True(runtimeIndex < withDeno.ToList().IndexOf("--"));
+    }
+
+    [Fact]
+    public void TikTokVideoArgumentsSelectSmallestVideoAudioTrackInsteadOfLinkedMusicSound()
+    {
+        var videoArgs = YtDlpAudioExtractor.BuildSafeArguments(
+            "https://www.tiktok.com/@_ne_music_/video/7609147543850765588",
+            "disabled-tools",
+            "source.media",
+            "http://tmusic:test@127.0.0.1:18234");
+
+        var formatIdx = videoArgs.ToList().IndexOf("--format");
+        Assert.True(formatIdx >= 0);
+        Assert.Equal(YtDlpAudioExtractor.TikTokVideoFormatSelector, videoArgs[formatIdx + 1]);
+
+        var sortIdx = videoArgs.ToList().IndexOf("--format-sort");
+        Assert.True(sortIdx >= 0);
+        Assert.Equal(YtDlpAudioExtractor.TikTokVideoFormatSort, videoArgs[sortIdx + 1]);
+
+        var maxSizeIdx = videoArgs.ToList().IndexOf("--max-filesize");
+        Assert.True(maxSizeIdx >= 0);
+        Assert.Equal("300M", videoArgs[maxSizeIdx + 1]);
+
+        var photoArgs = YtDlpAudioExtractor.BuildSafeArguments(
+            "https://www.tiktok.com/@creator/photo/7709386748572323080",
+            "disabled-tools",
+            "source.media",
+            "http://tmusic:test@127.0.0.1:18234");
+
+        var photoFormatIdx = photoArgs.ToList().IndexOf("--format");
+        Assert.True(photoFormatIdx >= 0);
+        Assert.Equal(YtDlpAudioExtractor.DefaultFormatSelector, photoArgs[photoFormatIdx + 1]);
+        Assert.DoesNotContain("--format-sort", photoArgs);
     }
 
     [Fact]

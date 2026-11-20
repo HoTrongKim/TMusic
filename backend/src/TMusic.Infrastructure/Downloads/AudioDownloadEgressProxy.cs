@@ -15,8 +15,8 @@ namespace TMusic.Infrastructure.Downloads;
 /// </summary>
 public sealed class AudioDownloadEgressProxy : IAsyncDisposable
 {
-    private const int MaximumConnections = 64;
-    private const long MaximumTransferBytes = 256L * 1024 * 1024;
+    private const int MaximumConnections = 128;
+    private const long MaximumTransferBytes = 384L * 1024 * 1024;
     private readonly string provider;
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> lookup;
     private readonly TcpListener listener = new(IPAddress.Loopback, 0);
@@ -61,9 +61,10 @@ public sealed class AudioDownloadEgressProxy : IAsyncDisposable
             "youtube" => host is "youtube.com" or "www.youtube.com" or "m.youtube.com" or "music.youtube.com" or
                 "youtu.be" or "youtubei.googleapis.com" or "www.googleapis.com" ||
                 Domain(host, "googlevideo.com") || Domain(host, "ytimg.com"),
-            "tiktok" => host is "tiktok.com" or "www.tiktok.com" or "m.tiktok.com" or "vt.tiktok.com" or "vm.tiktok.com" ||
-                Domain(host, "tiktokv.com") || Domain(host, "tiktokcdn.com") ||
-                Domain(host, "tiktokcdn-us.com") || Domain(host, "tiktokcdn-eu.com"),
+            "tiktok" => Domain(host, "tiktok.com") ||
+                Domain(host, "tiktokv.com") || Domain(host, "tiktokv.us") || Domain(host, "tiktokv.eu") ||
+                Domain(host, "tiktokcdn.com") || Domain(host, "tiktokcdn-us.com") ||
+                Domain(host, "tiktokcdn-eu.com") || Domain(host, "tiktokcdn-in.com"),
             "soundcloud" => host is "soundcloud.com" or "www.soundcloud.com" or "m.soundcloud.com" or
                 "on.soundcloud.com" or "api.soundcloud.com" or "api-v2.soundcloud.com" ||
                 Domain(host, "sndcdn.com") || Domain(host, "soundcloud.cloud"),

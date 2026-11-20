@@ -127,6 +127,22 @@ public sealed partial class YtDlpAudioExtractor(
         return null;
     }
 
+    public const string DefaultFormatSelector = "bestaudio/best";
+
+    // TikTok /video/<id> exposes format_id="audio" from TikTok's linked music.playUrl, which can be a
+    // different commercial track or duration (e.g. 60s background sound for a 44s video). Always prefer
+    // the video's own muxed audio+video stream sorted smallest-first so both duration/audio match the
+    // video AND long TikTok videos avoid downloading huge 1080p streams. TikTok /photo/<id> slideshows
+    // have no video stream and continue using DefaultFormatSelector ("bestaudio/best").
+    public const string TikTokVideoFormatSelector =
+        "best[vcodec!=none][acodec!=none][format_id!=download]/best[vcodec!=none][acodec!=none]/bestaudio/best";
+    public const string TikTokVideoFormatSort = "+filesize,+tbr,+res";
+
+    private static bool IsTikTokVideo(SourceUrl parsed) =>
+        string.Equals(parsed.Provider, "tiktok", StringComparison.OrdinalIgnoreCase) &&
+        Uri.TryCreate(parsed.CanonicalUrl, UriKind.Absolute, out var uri) &&
+        uri.AbsolutePath.Contains("/video/", StringComparison.OrdinalIgnoreCase);
+
     public static IReadOnlyList<string> BuildSafeArguments(string canonicalUrl, string disabledToolsDirectory,
         string outputTemplate, string? proxyAddress = null, string? denoPath = null)
     {
@@ -135,6 +151,7 @@ public sealed partial class YtDlpAudioExtractor(
         if (!Uri.TryCreate(proxyAddress, UriKind.Absolute, out var proxy) || proxy.Scheme != "http" ||
             proxy.Host != "127.0.0.1" || proxy.IsDefaultPort || proxy.UserInfo.Length == 0)
             throw new ProviderException("AUDIO_EGRESS_REQUIRED");
+        var isTikTokVideo = IsTikTokVideo(parsed);
         var arguments = new List<string>
         {
             "--no-playlist",
@@ -150,16 +167,22 @@ public sealed partial class YtDlpAudioExtractor(
             "--retries", "2",
             "--fragment-retries", "2",
             "--extractor-retries", "1",
-            "--format", "bestaudio/best",
+            "--format", isTikTokVideo ? TikTokVideoFormatSelector : DefaultFormatSelector,
             "--fixup", "never",
-            "--max-filesize", "100M",
+            "--max-filesize", "300M",
             "--socket-timeout", "20",
             "--newline",
+            "--progress-delta", "1",
             "--no-warnings",
             // Hide FFmpeg/ffprobe from yt-dlp: only C# may launch the constrained converter.
             "--ffmpeg-location", disabledToolsDirectory,
             "-o", outputTemplate,
         };
+        if (isTikTokVideo)
+        {
+            arguments.Add("--format-sort");
+            arguments.Add(TikTokVideoFormatSort);
+        }
         if (!string.IsNullOrWhiteSpace(denoPath))
         {
             arguments.Add("--js-runtimes");
@@ -204,41 +227,61 @@ public sealed partial class YtDlpAudioExtractor(
         var disabledTools = Path.Combine(workDir, "disabled-tools");
         Directory.CreateDirectory(disabledTools);
         var source = SourceUrl.ParseVideo(canonicalUrl) ?? throw new ProviderException("INVALID_SOURCE_URL");
-        var timeout = options.Value.EffectiveTimeout;
-        await using var egress = new AudioDownloadEgressProxy(source.Provider, timeout);
-        var args = BuildSafeArguments(canonicalUrl, disabledTools, downloadedFile, egress.ProxyAddress, ResolveDenoPath());
+        var downloadTimeout = options.Value.EffectiveTimeout;
+        var conversionTimeout = options.Value.EffectiveConversionTimeout;
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(timeout);
-        var token = timeoutCts.Token;
+        var exceededMaxFilesize = false;
+        AudioProcessResult downloaded;
+        await using (var egress = new AudioDownloadEgressProxy(source.Provider, downloadTimeout))
+        {
+            var args = BuildSafeArguments(canonicalUrl, disabledTools, downloadedFile, egress.ProxyAddress, ResolveDenoPath());
 
-        var lastReportedPercent = 0;
-        var lastReportTime = Stopwatch.GetTimestamp();
+            using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            downloadCts.CancelAfter(downloadTimeout);
+            var downloadToken = downloadCts.Token;
 
-        var downloaded = await BoundedAudioProcess.RunAsync(ytDlp, args, workDir, async line =>
-            {
-                var match = DownloadPercentRegex().Match(line);
-                if (match.Success &&
-                    double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var pct))
+            var lastReportedPercent = 0;
+            var lastReportTime = Stopwatch.GetTimestamp();
+
+            downloaded = await BoundedAudioProcess.RunAsync(ytDlp, args, workDir, async line =>
                 {
-                    var rounded = Math.Clamp((int)Math.Round(pct * 0.9), 1, 90);
-                    var elapsedMs = Stopwatch.GetElapsedTime(lastReportTime).TotalMilliseconds;
-                    if (rounded > lastReportedPercent && (elapsedMs >= 1000 || rounded >= 90))
+                    if (line.Contains("File is larger than max-filesize", StringComparison.OrdinalIgnoreCase))
                     {
-                        lastReportedPercent = rounded;
-                        lastReportTime = Stopwatch.GetTimestamp();
-                        await onProgress(rounded, token);
+                        exceededMaxFilesize = true;
+                        return;
                     }
-                }
-            }, token, timeout);
+                    var match = DownloadPercentRegex().Match(line);
+                    if (match.Success &&
+                        double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var pct))
+                    {
+                        var rounded = Math.Clamp((int)Math.Round(pct * 0.9), 1, 90);
+                        var elapsedMs = Stopwatch.GetElapsedTime(lastReportTime).TotalMilliseconds;
+                        if (rounded > lastReportedPercent && (elapsedMs >= 1000 || rounded >= 90))
+                        {
+                            lastReportedPercent = rounded;
+                            lastReportTime = Stopwatch.GetTimestamp();
+                            await onProgress(rounded, downloadToken);
+                        }
+                    }
+                }, downloadToken, downloadTimeout);
+        }
+
         if (downloaded.ExitCode != 0)
         {
             throw ClassifyFailure(source.Provider, downloaded.StandardError);
         }
+        if (exceededMaxFilesize && !File.Exists(downloadedFile))
+        {
+            throw ClassifyFailure(source.Provider, "File is larger than max-filesize");
+        }
 
-        await onProgress(95, token);
+        using var convertCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        convertCts.CancelAfter(conversionTimeout);
+        var convertToken = convertCts.Token;
+
+        await onProgress(95, convertToken);
         var mp3File = Path.Combine(workDir, "track.mp3");
-        await LocalMp3Converter.ConvertAsync(ffmpeg, downloadedFile, mp3File, token, bitrateKbps, timeout);
+        await LocalMp3Converter.ConvertAsync(ffmpeg, downloadedFile, mp3File, convertToken, bitrateKbps, conversionTimeout);
 
         return mp3File;
     }

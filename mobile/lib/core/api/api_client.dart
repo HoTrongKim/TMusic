@@ -177,7 +177,7 @@ class ApiClient {
         normalizedPath,
         options: Options(
           responseType: ResponseType.bytes,
-          receiveTimeout: const Duration(minutes: 3),
+          receiveTimeout: const Duration(minutes: 6),
           headers: {if (access != null) 'Authorization': 'Bearer $access'},
         ),
       );
@@ -198,7 +198,7 @@ class ApiClient {
         data: data,
         options: Options(
           responseType: ResponseType.bytes,
-          receiveTimeout: const Duration(minutes: 3),
+          receiveTimeout: const Duration(minutes: 6),
           headers: {if (access != null) 'Authorization': 'Bearer $access'},
         ),
       );

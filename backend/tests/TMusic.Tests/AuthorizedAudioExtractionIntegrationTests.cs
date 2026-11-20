@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using TMusic.Infrastructure.Downloads;
@@ -44,6 +45,20 @@ public sealed class AuthorizedAudioExtractionIntegrationTests
             Assert.Equal(3, await stream.ReadAsync(header));
             Assert.True(header.SequenceEqual("ID3"u8.ToArray()) || (header[0] == 0xFF && (header[1] & 0xE0) == 0xE0),
                 "The converted output did not have an MP3 frame or ID3 header.");
+
+            if (double.TryParse(Environment.GetEnvironmentVariable("TMUSIC_LIVE_AUDIO_EXPECTED_DURATION_SECONDS"),
+                NumberStyles.Float, CultureInfo.InvariantCulture, out var expectedDuration))
+            {
+                var ffprobe = extractor.ResolveFfprobePath();
+                Assert.False(string.IsNullOrWhiteSpace(ffprobe), "ffprobe is required to verify extracted MP3 duration.");
+                var probe = await BoundedAudioProcess.RunAsync(ffprobe!,
+                    ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", output],
+                    workDir, null, CancellationToken.None, TimeSpan.FromSeconds(15), captureStandardOutput: true);
+                Assert.Equal(0, probe.ExitCode);
+                Assert.True(double.TryParse(probe.StandardOutput.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var actualDuration),
+                    $"Unexpected ffprobe duration output: {probe.StandardOutput}");
+                Assert.InRange(actualDuration, expectedDuration - 2.0, expectedDuration + 2.0);
+            }
         }
         finally
         {
