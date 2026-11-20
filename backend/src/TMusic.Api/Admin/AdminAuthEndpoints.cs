@@ -1,7 +1,5 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text;
-using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
@@ -18,12 +16,9 @@ public static class AdminAuthEndpoints
     {
         var auth = admin.MapGroup("/auth").RequireRateLimiting("admin-auth");
         auth.MapPost("/login", Login);
-        auth.MapPost("/mfa/setup", SetupMfa);
-        auth.MapPost("/mfa/verify", VerifyMfa);
         auth.MapPost("/refresh", Refresh);
         auth.MapGet("/invitations/inspect", InspectInvitation);
         auth.MapPost("/invitations/accept", AcceptInvitation);
-        auth.MapPost("/invitations/complete-mfa", CompleteInvitationMfa);
 
         var protectedAuth = admin.MapGroup("/auth")
             .RequireAuthorization(AdminAuthConstants.AdminAccessPolicy)
@@ -31,18 +26,17 @@ public static class AdminAuthEndpoints
         protectedAuth.MapGet("/me", Me);
         protectedAuth.MapPost("/logout", Logout);
         protectedAuth.MapPost("/logout-all", LogoutAll);
-        protectedAuth.MapPost("/mfa/recovery-codes", RegenerateRecoveryCodes);
     }
 
     private static async Task<IResult> Login(
         AdminLoginRequest req,
+        HttpContext http,
         UserManager<Account> users,
         SignInManager<Account> signIn,
         IPasswordHasher<Account> hasher,
         AdminPermissionService permissionService,
         AdminAuditService audit,
         SessionService sessions,
-        TMusicDb db,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -81,140 +75,29 @@ public static class AdminAuthEndpoints
             return ApiSupport.Problem("ADMIN_ACCESS_REQUIRED", 403, "Tài khoản này không có quyền truy cập TMusic Admin.");
         }
 
-        var rawChallenge = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
-        var purpose = account.TwoFactorEnabled ? "MFA_VERIFY" : "MFA_SETUP";
-        db.AdminMfaChallenges.Add(new AdminMfaChallenge
-        {
-            Id = ApiSupport.Hash(rawChallenge),
-            UserId = account.Id,
-            Purpose = purpose,
-            DeviceName = string.IsNullOrWhiteSpace(req.DeviceName) ? "TMusic Admin Web" : req.DeviceName.Trim()[..Math.Min(req.DeviceName.Trim().Length, 100)],
-            CreatedAt = now,
-            ExpiresAt = now.AddMinutes(purpose == "MFA_SETUP" ? 15 : 5)
-        });
-        await db.SaveChangesAsync(ct);
-
-        return Results.Ok(new
-        {
-            status = purpose == "MFA_SETUP" ? "MFA_SETUP_REQUIRED" : "MFA_REQUIRED",
-            challengeToken = rawChallenge,
-            expiresAt = now.AddMinutes(purpose == "MFA_SETUP" ? 15 : 5)
-        });
-    }
-
-    private static async Task<IResult> SetupMfa(
-        MfaSetupRequest req,
-        TMusicDb db,
-        UserManager<Account> users,
-        TimeProvider clock,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(req.ChallengeToken))
-            return ApiSupport.Problem("INVALID_CHALLENGE", 400);
-
-        var now = clock.GetUtcNow();
-        var hash = ApiSupport.Hash(req.ChallengeToken.Trim());
-        var challenge = await db.AdminMfaChallenges.AsNoTracking()
-            .FirstOrDefaultAsync(c => c.Id == hash && c.ConsumedAt == null && c.ExpiresAt > now, ct);
-        if (challenge is null || challenge.Purpose != "MFA_SETUP")
-            return ApiSupport.Problem("INVALID_CHALLENGE", 401, "Phiên thiết lập MFA đã hết hạn hoặc không hợp lệ.");
-
-        var account = await users.FindByIdAsync(challenge.UserId.ToString());
-        if (account is null || account.DeletedAt is not null || account.IsCurrentlySuspended(now))
-            return ApiSupport.Problem("ACCOUNT_UNAVAILABLE", 403);
-
-        var key = await users.GetAuthenticatorKeyAsync(account);
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            await users.ResetAuthenticatorKeyAsync(account);
-            key = await users.GetAuthenticatorKeyAsync(account);
-        }
-
-        var email = account.Email ?? account.Id.ToString("D");
-        var otpAuthUri = $"otpauth://totp/TMusic%20Admin:{UrlEncoder.Default.Encode(email)}?secret={key}&issuer=TMusic%20Admin&digits=6";
-        return Results.Ok(new
-        {
-            sharedKey = FormatKey(key!),
-            rawKey = key,
-            otpAuthUri
-        });
-    }
-
-    private static async Task<IResult> VerifyMfa(
-        MfaVerifyRequest req,
-        HttpContext http,
-        TMusicDb db,
-        UserManager<Account> users,
-        AdminPermissionService permissionService,
-        SessionService sessions,
-        AdminAuditService audit,
-        TimeProvider clock,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(req.ChallengeToken) || string.IsNullOrWhiteSpace(req.Code))
-            return ApiSupport.Problem("INVALID_MFA_CODE", 400, "Vui lòng nhập mã xác thực MFA.");
-
-        var now = clock.GetUtcNow();
-        var hash = ApiSupport.Hash(req.ChallengeToken.Trim());
-        var challenge = await db.AdminMfaChallenges
-            .FirstOrDefaultAsync(c => c.Id == hash && c.ConsumedAt == null && c.ExpiresAt > now, ct);
-        if (challenge is null)
-            return ApiSupport.Problem("INVALID_CHALLENGE", 401, "Phiên xác thực MFA đã hết hạn. Vui lòng đăng nhập lại.");
-
-        var account = await users.FindByIdAsync(challenge.UserId.ToString());
-        if (account is null || account.DeletedAt is not null || account.IsCurrentlySuspended(now))
-            return ApiSupport.Problem("ACCOUNT_UNAVAILABLE", 403);
-
-        var roles = await permissionService.GetEffectiveRolesAsync(account.Id, ct);
-        if (!roles.Any(AdminRoles.IsAdministrative))
-            return ApiSupport.Problem("ADMIN_ACCESS_REQUIRED", 403);
-
-        var cleanedCode = req.Code.Replace(" ", "").Replace("-", "").Trim();
-        var verified = await users.VerifyTwoFactorTokenAsync(account, users.Options.Tokens.AuthenticatorTokenProvider, cleanedCode);
-        var usedRecovery = false;
-
-        if (!verified && challenge.Purpose == "MFA_VERIFY")
-        {
-            var recoveryResult = await users.RedeemTwoFactorRecoveryCodeAsync(account, req.Code.Trim());
-            verified = recoveryResult.Succeeded;
-            usedRecovery = verified;
-        }
-
-        if (!verified)
-        {
-            await audit.RecordAuditAsync(account.Id, account.Email, roles.FirstOrDefault(), "ADMIN_MFA_VERIFY", "ACCOUNT", account.Id.ToString("D"), "FAILURE", "Mã MFA không hợp lệ.", null, ct);
-            return ApiSupport.Problem("INVALID_MFA_CODE", 401, "Mã xác thực 6 chữ số hoặc mã khôi phục không đúng.");
-        }
-
-        IReadOnlyList<string>? recoveryCodes = null;
-        if (challenge.Purpose == "MFA_SETUP" || !account.TwoFactorEnabled)
-        {
-            await users.SetTwoFactorEnabledAsync(account, true);
-            recoveryCodes = (await users.GenerateNewTwoFactorRecoveryCodesAsync(account, 10))?.ToList() ?? [];
-            await audit.RecordAuditAsync(account.Id, account.Email, roles.FirstOrDefault(), "ADMIN_MFA_ENABLED", "ACCOUNT", account.Id.ToString("D"), "SUCCESS", "Thiết lập TOTP MFA thành công.", null, ct);
-        }
-
-        challenge.ConsumedAt = now;
-        var session = await sessions.CreateAdmin(account.Id, challenge.DeviceName, mfaVerified: true, ct);
+        var deviceName = string.IsNullOrWhiteSpace(req.DeviceName)
+            ? "TMusic Admin Web"
+            : req.DeviceName.Trim()[..Math.Min(req.DeviceName.Trim().Length, 100)];
+        var session = await sessions.CreateAdmin(account.Id, deviceName, mfaVerified: false, ct);
         var csrf = SetAdminAuthCookies(http, session);
         var permissions = await permissionService.GetEffectivePermissionsAsync(account.Id, ct);
 
         await audit.RecordAuditAsync(account.Id, account.Email, roles.FirstOrDefault(), "ADMIN_LOGIN", "ACCOUNT", account.Id.ToString("D"), "SUCCESS",
-            usedRecovery ? "Đăng nhập quản trị bằng mã khôi phục MFA." : "Đăng nhập quản trị thành công qua MFA.", null, ct);
+            "Đăng nhập quản trị thành công.", null, ct);
 
         return Results.Ok(new
         {
+            status = "AUTHENTICATED",
             accessToken = session.AccessToken,
             refreshToken = session.RefreshToken,
             expiresAt = session.ExpiresAt,
             csrfToken = csrf,
-            recoveryCodes,
             admin = new
             {
                 account.Id,
                 account.Email,
                 account.DisplayName,
-                mfaEnabled = true,
+                mfaEnabled = false,
                 roles,
                 permissions = permissions.OrderBy(x => x).ToArray()
             }
@@ -339,31 +222,6 @@ public static class AdminAuthEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> RegenerateRecoveryCodes(
-        MfaCodeOnlyRequest req,
-        ClaimsPrincipal principal,
-        UserManager<Account> users,
-        AdminPermissionService permissionService,
-        AdminAuditService audit,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(req.Code))
-            return ApiSupport.Problem("INVALID_MFA_CODE", 400);
-
-        var userId = ApiSupport.UserId(principal);
-        var account = await users.FindByIdAsync(userId.ToString());
-        if (account is null) return Results.Unauthorized();
-
-        var cleaned = req.Code.Replace(" ", "").Replace("-", "").Trim();
-        var ok = await users.VerifyTwoFactorTokenAsync(account, users.Options.Tokens.AuthenticatorTokenProvider, cleaned);
-        if (!ok)
-            return ApiSupport.Problem("INVALID_MFA_CODE", 401, "Mã TOTP hiện tại không đúng.");
-
-        var codes = (await users.GenerateNewTwoFactorRecoveryCodesAsync(account, 10))?.ToList() ?? [];
-        await audit.RecordAuditFromPrincipalAsync(principal, permissionService, "ADMIN_MFA_RECOVERY_REGENERATED", "ACCOUNT", account.Id.ToString("D"), "SUCCESS", null, null, ct);
-        return Results.Ok(new { recoveryCodes = codes });
-    }
-
     private static async Task<IResult> InspectInvitation(
         string? token,
         TMusicDb db,
@@ -393,9 +251,13 @@ public static class AdminAuthEndpoints
 
     private static async Task<IResult> AcceptInvitation(
         AcceptInvitationRequest req,
+        HttpContext http,
         TMusicDb db,
         UserManager<Account> users,
         SignInManager<Account> signIn,
+        AdminPermissionService permissionService,
+        SessionService sessions,
+        AdminAuditService audit,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -441,55 +303,6 @@ public static class AdminAuthEndpoints
                 return ApiSupport.Problem("INVALID_CREDENTIALS", 401, "Vui lòng xác nhận mật khẩu tài khoản hiện có.");
         }
 
-        var key = await users.GetAuthenticatorKeyAsync(account);
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            await users.ResetAuthenticatorKeyAsync(account);
-            key = await users.GetAuthenticatorKeyAsync(account);
-        }
-
-        var otpAuthUri = $"otpauth://totp/TMusic%20Admin:{UrlEncoder.Default.Encode(invite.Email)}?secret={key}&issuer=TMusic%20Admin&digits=6";
-        return Results.Ok(new
-        {
-            status = "MFA_CONFIRMATION_REQUIRED",
-            sharedKey = FormatKey(key!),
-            rawKey = key,
-            otpAuthUri,
-            roleName = invite.RoleName
-        });
-    }
-
-    private static async Task<IResult> CompleteInvitationMfa(
-        CompleteInvitationMfaRequest req,
-        HttpContext http,
-        TMusicDb db,
-        UserManager<Account> users,
-        AdminPermissionService permissionService,
-        SessionService sessions,
-        AdminAuditService audit,
-        TimeProvider clock,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(req.Token) || string.IsNullOrWhiteSpace(req.Code))
-            return ApiSupport.Problem("INVALID_REQUEST", 400);
-
-        var now = clock.GetUtcNow();
-        var hash = ApiSupport.Hash(req.Token.Trim());
-        var invite = await db.AdminInvitations.FirstOrDefaultAsync(x => x.TokenHash == hash, ct);
-        if (invite is null) return ApiSupport.Problem("INVITATION_NOT_FOUND", 404);
-        if (invite.RevokedAt is not null) return ApiSupport.Problem("INVITATION_REVOKED", 410);
-        if (invite.AcceptedAt is not null) return ApiSupport.Problem("INVITATION_ALREADY_USED", 409);
-        if (invite.ExpiresAt <= now) return ApiSupport.Problem("INVITATION_EXPIRED", 410);
-
-        var account = await users.FindByEmailAsync(invite.Email);
-        if (account is null || account.DeletedAt is not null || account.IsCurrentlySuspended(now))
-            return ApiSupport.Problem("ACCOUNT_UNAVAILABLE", 403);
-
-        var cleanedCode = req.Code.Replace(" ", "").Replace("-", "").Trim();
-        var ok = await users.VerifyTwoFactorTokenAsync(account, users.Options.Tokens.AuthenticatorTokenProvider, cleanedCode);
-        if (!ok)
-            return ApiSupport.Problem("INVALID_MFA_CODE", 401, "Mã TOTP không hợp lệ.");
-
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var updated = await db.AdminInvitations
             .Where(x => x.Id == invite.Id && x.AcceptedAt == null && x.RevokedAt == null && x.ExpiresAt > now)
@@ -499,13 +312,11 @@ public static class AdminAuthEndpoints
         if (updated == 0)
             return ApiSupport.Problem("INVITATION_ALREADY_USED", 409);
 
-        await users.SetTwoFactorEnabledAsync(account, true);
-        var recoveryCodes = (await users.GenerateNewTwoFactorRecoveryCodesAsync(account, 10))?.ToList() ?? [];
         var roleResult = await permissionService.SetSingleRoleAsync(account, invite.RoleName, ct);
         if (!roleResult.Succeeded)
             return ApiSupport.Problem("ROLE_ASSIGNMENT_FAILED", 500);
 
-        var session = await sessions.CreateAdmin(account.Id, "TMusic Admin Web", mfaVerified: true, ct);
+        var session = await sessions.CreateAdmin(account.Id, "TMusic Admin Web", mfaVerified: false, ct);
         await tx.CommitAsync(ct);
 
         var csrf = SetAdminAuthCookies(http, session);
@@ -513,21 +324,21 @@ public static class AdminAuthEndpoints
         var permissions = await permissionService.GetEffectivePermissionsAsync(account.Id, ct);
 
         await audit.RecordAuditAsync(account.Id, account.Email, invite.RoleName, "ADMIN_INVITATION_ACCEPTED", "ADMIN_INVITATION", invite.Id.ToString("D"), "SUCCESS",
-            $"Hoàn tất lời mời quản trị với vai trò {invite.RoleName} và kích hoạt MFA.", null, ct);
+            $"Hoàn tất lời mời quản trị với vai trò {invite.RoleName}.", null, ct);
 
         return Results.Ok(new
         {
+            status = "AUTHENTICATED",
             accessToken = session.AccessToken,
             refreshToken = session.RefreshToken,
             expiresAt = session.ExpiresAt,
             csrfToken = csrf,
-            recoveryCodes,
             admin = new
             {
                 account.Id,
                 account.Email,
                 account.DisplayName,
-                mfaEnabled = true,
+                mfaEnabled = false,
                 roles,
                 permissions = permissions.OrderBy(x => x).ToArray()
             }
@@ -569,23 +380,7 @@ public static class AdminAuthEndpoints
         };
     }
 
-    private static string FormatKey(string unformattedKey)
-    {
-        var result = new StringBuilder();
-        for (var i = 0; i < unformattedKey.Length; i += 4)
-        {
-            if (result.Length > 0) result.Append(' ');
-            var len = Math.Min(4, unformattedKey.Length - i);
-            result.Append(unformattedKey.AsSpan(i, len));
-        }
-        return result.ToString().ToLowerInvariant();
-    }
-
     public sealed record AdminLoginRequest(string? Email, string? Password, string? DeviceName = null);
-    public sealed record MfaSetupRequest(string? ChallengeToken);
-    public sealed record MfaVerifyRequest(string? ChallengeToken, string? Code);
-    public sealed record MfaCodeOnlyRequest(string? Code);
     public sealed record RefreshBody(string? RefreshToken);
     public sealed record AcceptInvitationRequest(string? Token, string? Password, string? DisplayName = null);
-    public sealed record CompleteInvitationMfaRequest(string? Token, string? Code);
 }

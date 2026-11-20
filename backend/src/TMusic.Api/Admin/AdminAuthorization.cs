@@ -190,19 +190,18 @@ public sealed class AdminPermissionHandler(
         var permissionService = scope.ServiceProvider.GetRequiredService<AdminPermissionService>();
         var now = clock.GetUtcNow();
 
-        // 1. Verify active admin session with MFA verified in SQL Server (never trust stale JWT claims alone).
+        // 1. Verify active admin session in SQL Server (never trust stale JWT claims or regular mobile sessions).
         var sessionValid = await db.UserSessions.AsNoTracking().AnyAsync(s =>
             s.UserId == userId &&
             s.FamilyId == familyId &&
             s.IsAdminSession &&
-            s.MfaVerified &&
             s.RevokedAt == null &&
             s.RotatedAt == null &&
             s.ExpiresAt > now, ct);
         if (!sessionValid)
             return;
 
-        // 2. Verify account status and mandatory MFA on the account.
+        // 2. Verify account status is active (not deleted, suspended, or locked out).
         var account = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId)
             .Select(u => new
@@ -211,16 +210,14 @@ public sealed class AdminPermissionHandler(
                 u.DeletedAt,
                 u.IsSuspended,
                 u.SuspendedUntil,
-                u.LockoutEnd,
-                u.TwoFactorEnabled
+                u.LockoutEnd
             })
             .FirstOrDefaultAsync(ct);
 
         if (account is null ||
             account.DeletedAt is not null ||
             (account.IsSuspended && (account.SuspendedUntil is null || account.SuspendedUntil > now)) ||
-            (account.LockoutEnd is not null && account.LockoutEnd > now) ||
-            !account.TwoFactorEnabled)
+            (account.LockoutEnd is not null && account.LockoutEnd > now))
             return;
 
         // 3. Verify live roles & permissions from SQL Server.

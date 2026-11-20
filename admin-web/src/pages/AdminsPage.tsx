@@ -135,7 +135,7 @@ export function AdminsPage() {
         <div className="card-header">
           <div>
             <h2 className="card-title">Quản lý Quản trị viên (SuperAdmin)</h2>
-            <p className="card-subtitle">Mời quản trị viên bằng token dùng một lần có hạn sử dụng, yêu cầu MFA bắt buộc, bảo vệ SuperAdmin cuối cùng.</p>
+            <p className="card-subtitle">Mời quản trị viên bằng token dùng một lần có hạn sử dụng, bảo vệ SuperAdmin cuối cùng.</p>
           </div>
           <button className="btn btn-primary" onClick={() => { setCreatedInvite(null); setInviteOpen(true); }}>
             <UserPlus size={15} />
@@ -149,7 +149,7 @@ export function AdminsPage() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Quản trị viên</th><th>Vai trò</th><th>MFA</th><th>Trạng thái</th><th>Hoạt động cuối</th><th>Thao tác</th></tr>
+                <tr><th>Quản trị viên</th><th>Vai trò</th><th>Trạng thái</th><th>Hoạt động cuối</th><th>Thao tác</th></tr>
               </thead>
               <tbody>
                 {admins.map((a) => (
@@ -159,7 +159,6 @@ export function AdminsPage() {
                       <div className="mono" style={{ color: 'var(--text-muted)' }}>{a.email}</div>
                     </td>
                     <td><StatusBadge status={a.role} /></td>
-                    <td><StatusBadge status={a.mfaEnabled ? 'ACTIVE' : 'WARNING'} /></td>
                     <td><StatusBadge status={a.status} /></td>
                     <td>{formatDateTime(a.lastActiveAt)}</td>
                     <td>
@@ -249,7 +248,7 @@ export function AdminsPage() {
           {!createdInvite ? (
             <>
               <div className="notice-banner" style={{ marginBottom: 12 }}>
-                Hệ thống tạo token ngẫu nhiên dùng một lần (hết hạn sau 24 giờ), không tạo hay gửi mật khẩu plaintext. Người được mời bắt buộc bật MFA trước khi nhận quyền.
+                Hệ thống tạo token ngẫu nhiên dùng một lần (hết hạn sau 24 giờ), không tạo hay gửi mật khẩu plaintext.
               </div>
               <div className="form-field">
                 <label>Email người được mời</label>

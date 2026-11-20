@@ -111,7 +111,7 @@ export function Layout({
         <div className="sidebar-footer">
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
             <Activity size={13} style={{ color: 'var(--success)' }} />
-            <span>MFA & RBAC đang hoạt động</span>
+            <span>RBAC & CSRF đang hoạt động</span>
           </div>
           <div className="mono" style={{ opacity: 0.75 }}>
             TMusic V4 Admin Console

@@ -457,3 +457,9 @@ Hoàn thành theo bốn yêu cầu giao diện/lỗi đăng nhập của ngườ
     2. `https://www.youtube.com/watch?v=YE7VzlLtp-4` (*Big Buck Bunny Classic*): tải thành công `9,655,276 bytes` `.m4a` trong `3.33s` (87 bước tiến độ); `ffprobe` xác nhận `codec_name=aac`, `codec_type=audio`, `duration=596.52s`, `bit_rate=129487`.
   - Railway `tmusic-api`: xác nhận `MediaProviders__External__Enabled=false` đang hoạt động (0 chi phí credit ngoài).
   - Chưa build lại APK/IPA trong lượt này; `.env` và `TMusicDev` không bị tác động.
+
+- **Deploy Railway & Build APK/IPA từ commit `6122a4a`:**
+  - Railway `tmusic-api` deployment `165adeb1-226b-48dc-9313-44b826c5b575` (`main` @ `6122a4a`) -> **`SUCCESS`**. Gateway `/health/ready` (`HTTP 200`), `/api/v1/system/capabilities` (`HTTP 200`), `/api/health/media` (`HTTP 200`, `tunelio` disabled).
+  - GitHub CI `TMusic V2` (`44707023867`, Backend SQL + Mobile analyze/tests/APK) -> **`success`**.
+  - Android APK: `.local/artifacts/TMusic-android-debug-google.apk` (build 12, `180,585,102 bytes`, `627` ZIP entries, `AndroidManifest.xml` & `classes.dex` hợp lệ, SHA-256 `7753708E4A4EB505D0CF73E81289ED70973F7B55141216E10A0F98FE5E0B9E07`), cấu hình API gateway `https://tmusic-api-gateway.trongkim3008.workers.dev`.
+  - iOS IPA: GitHub Actions `Build iOS IPA` (`44707060746`, build 10, `macos-latest`) -> **`success`** (đạt analyze/tests, build release `--no-codesign`, và cài/khởi chạy `com.tmusic.tmusic` thành công trên iOS Simulator). Artifact `.local/artifacts/TMusic-2.0.0-build10-unsigned.ipa` (`10,729,830 bytes`, `191` ZIP entries, có `Payload/Runner.app/Runner` & `Info.plist`, SHA-256 `D96581FFF1AEFA258F0E854E5FA568247785B0262623CFD3BEF57C382FD4A535`). iOS bắt buộc chọn luồng `MP4/M4A (AAC)` để phát native trên `AVPlayer`; tệp IPA chưa ký (cần ký Apple khi cài iPhone thật).

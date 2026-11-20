@@ -16,26 +16,68 @@ describe('TMusic Admin Web Dashboard', () => {
     document.documentElement.setAttribute('data-theme', 'dark');
   });
 
-  it('shows MFA login screen when unauthenticated and requires MFA verify step', async () => {
+  it('shows standard admin login screen when unauthenticated and signs in directly with email and password', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/admin/auth/me')) return jsonResponse({ code: 'UNAUTHORIZED' }, 401);
       if (url.endsWith('/api/admin/auth/refresh')) return jsonResponse({ code: 'SESSION_EXPIRED' }, 401);
       if (url.endsWith('/api/admin/auth/login')) {
-        return jsonResponse({ status: 'MFA_REQUIRED', challengeToken: 'chal-123', expiresAt: '2026-11-20T01:00:00Z' });
+        return jsonResponse({
+          status: 'AUTHENTICATED',
+          csrfToken: 'csrf-super',
+          admin: {
+            id: 'u-super',
+            email: 'super@tmusic.test',
+            displayName: 'SuperAdmin',
+            mfaEnabled: false,
+            roles: ['SuperAdmin'],
+            permissions: ['analytics.read', 'users.read', 'settings.read', 'admins.manage'],
+          },
+        });
+      }
+      if (url.includes('/api/admin/dashboard')) {
+        return jsonResponse({
+          range: '30d',
+          from: '2026-10-20T00:00:00Z',
+          to: '2026-11-20T00:00:00Z',
+          generatedAt: '2026-11-20T00:00:00Z',
+          alerts: { openModerationFlags: 0, recentErrors24h: 0 },
+          kpis: {
+            totalAccounts: { value: 10, source: 'AspNetUsers' },
+            newUsersToday: { value: 1, source: 'Today' },
+            activeUsers7d: { value: 5, source: '7d' },
+            activeUsers30d: { value: 8, source: '30d' },
+            totalAlbums: { value: 4, source: 'Albums' },
+            totalSavedSongs: { value: 20, source: 'UserLibrarySongs' },
+            serverStoredMp3Count: { value: 2, source: 'Server MP3' },
+            totalDownloadJobs: { value: 3, source: 'AudioDownloadJobs' },
+            completedDownloads: { value: 2, source: 'COMPLETE' },
+            failedDownloads: { value: 1, source: 'FAILED' },
+            activeDownloads: { value: 0, source: 'ACTIVE' },
+            serverStorageBytes: { value: 1024, audioBytes: 1024, coverBytes: 0, audioFileCount: 2, coverFileCount: 0, source: 'Disk' },
+          },
+          charts: {
+            registrationsByDay: [],
+            downloadsByDay: [],
+            downloadStatusRatio: [],
+            sourceDistribution: [],
+            activeUsersByDay: [],
+            storageHistory: { available: false, reason: 'Chưa có dữ liệu lịch sử.' },
+          },
+        });
       }
       return jsonResponse({}, 404);
     });
     vi.stubGlobal('fetch', fetchMock);
 
     render(<App />);
-    expect(await screen.findByText('Cổng quản trị hệ thống bảo mật MFA')).toBeInTheDocument();
+    expect(await screen.findByText('Cổng quản trị hệ thống TMusic')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Email quản trị'), { target: { value: 'super@tmusic.test' } });
     fireEvent.change(screen.getByLabelText('Mật khẩu'), { target: { value: 'Strong-Pass!2026' } });
-    fireEvent.click(screen.getByRole('button', { name: /Tiếp tục tới bước MFA/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Đăng nhập/i }));
 
-    expect(await screen.findByLabelText(/Mã xác thực 6 chữ số/i)).toBeInTheDocument();
+    expect(await screen.findByText('Tổng quan vận hành TMusic')).toBeInTheDocument();
   });
 
   it('hides SuperAdmin & Settings sections for Moderator based on server permissions and renders real dashboard data', async () => {

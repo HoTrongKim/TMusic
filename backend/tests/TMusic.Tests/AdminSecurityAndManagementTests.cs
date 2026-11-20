@@ -20,7 +20,7 @@ public sealed class AdminSecurityAndManagementTests(SqlApiFixture api)
 {
     private const string AdminPassword = "Admin-Strong!2026#Test";
 
-    private async Task<(Guid UserId, string Email, string AccessToken, string RefreshToken, string[] RecoveryCodes)>
+    private async Task<(Guid UserId, string Email, string AccessToken, string RefreshToken)>
         BootstrapAndLoginAdminAsync(string roleName, string? email = null)
     {
         email ??= $"{roleName.ToLowerInvariant()}-{Guid.NewGuid():N}@tmusic.test";
@@ -51,23 +51,11 @@ public sealed class AdminSecurityAndManagementTests(SqlApiFixture api)
         using var anon = api.Client();
         var loginRes = await anon.PostAsJsonAsync("/api/admin/auth/login", new { email, password = AdminPassword, deviceName = "Admin Test" });
         var loginJson = await SqlApiFixture.Json(loginRes);
-        Assert.Equal("MFA_SETUP_REQUIRED", loginJson.GetProperty("status").GetString());
-        var challengeToken = loginJson.GetProperty("challengeToken").GetString()!;
+        Assert.Equal("AUTHENTICATED", loginJson.GetProperty("status").GetString());
+        var accessToken = loginJson.GetProperty("accessToken").GetString()!;
+        var refreshToken = loginJson.GetProperty("refreshToken").GetString()!;
 
-        var setupRes = await anon.PostAsJsonAsync("/api/admin/auth/mfa/setup", new { challengeToken });
-        var setupJson = await SqlApiFixture.Json(setupRes);
-        var rawKey = setupJson.GetProperty("rawKey").GetString()!;
-        Assert.False(string.IsNullOrWhiteSpace(rawKey));
-
-        var totpCode = ComputeTotp(rawKey);
-        var verifyRes = await anon.PostAsJsonAsync("/api/admin/auth/mfa/verify", new { challengeToken, code = totpCode });
-        var verifyJson = await SqlApiFixture.Json(verifyRes);
-        var accessToken = verifyJson.GetProperty("accessToken").GetString()!;
-        var refreshToken = verifyJson.GetProperty("refreshToken").GetString()!;
-        var recoveryCodes = verifyJson.GetProperty("recoveryCodes").EnumerateArray().Select(x => x.GetString()!).ToArray();
-        Assert.Equal(10, recoveryCodes.Length);
-
-        return (userId, email, accessToken, refreshToken, recoveryCodes);
+        return (userId, email, accessToken, refreshToken);
     }
 
     [SqlFact]
@@ -231,7 +219,7 @@ public sealed class AdminSecurityAndManagementTests(SqlApiFixture api)
         var super = await BootstrapAndLoginAdminAsync(AdminRoles.SuperAdmin);
         using var superClient = api.Client(super.AccessToken);
 
-        // 9 & 10. Invite Admin -> valid inspect -> accept -> complete MFA -> cannot reuse token
+        // 9 & 10. Invite Admin -> valid inspect -> accept directly -> cannot reuse token
         var inviteEmail = $"invited-{Guid.NewGuid():N}@tmusic.test";
         var inviteJson = await SqlApiFixture.Json(await superClient.PostAsJsonAsync("/api/admin/admins/invite", new { email = inviteEmail, roleName = "Admin", expiresInHours = 24 }));
         var token = inviteJson.GetProperty("invitationToken").GetString()!;
@@ -240,10 +228,9 @@ public sealed class AdminSecurityAndManagementTests(SqlApiFixture api)
         var inspect = await SqlApiFixture.Json(await anon.GetAsync($"/api/admin/auth/invitations/inspect?token={Uri.EscapeDataString(token)}"));
         Assert.Equal(inviteEmail, inspect.GetProperty("email").GetString());
 
-        var accept = await SqlApiFixture.Json(await anon.PostAsJsonAsync("/api/admin/auth/invitations/accept", new { token, password = AdminPassword, displayName = "Invited Ops" }));
-        var totp = ComputeTotp(accept.GetProperty("rawKey").GetString()!);
-        var completed = await SqlApiFixture.Json(await anon.PostAsJsonAsync("/api/admin/auth/invitations/complete-mfa", new { token, code = totp }));
-        var invitedAccess = completed.GetProperty("accessToken").GetString()!;
+        var accepted = await SqlApiFixture.Json(await anon.PostAsJsonAsync("/api/admin/auth/invitations/accept", new { token, password = AdminPassword, displayName = "Invited Ops" }));
+        Assert.Equal("AUTHENTICATED", accepted.GetProperty("status").GetString());
+        var invitedAccess = accepted.GetProperty("accessToken").GetString()!;
 
         using (var invitedClient = api.Client(invitedAccess))
         {
@@ -355,46 +342,5 @@ public sealed class AdminSecurityAndManagementTests(SqlApiFixture api)
         };
         req.Headers.Add(AdminAuthConstants.CsrfHeaderName, "csrf-expected-token");
         await SqlApiFixture.Expect(await cookieClient.SendAsync(req), HttpStatusCode.OK);
-    }
-
-    private static string ComputeTotp(string base32Secret)
-    {
-        var key = DecodeBase32(base32Secret);
-        var step = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 30;
-        Span<byte> counter = stackalloc byte[8];
-        for (var i = 7; i >= 0; i--)
-        {
-            counter[i] = (byte)(step & 0xFF);
-            step >>= 8;
-        }
-        using var hmac = new HMACSHA1(key);
-        var hash = hmac.ComputeHash(counter.ToArray());
-        var offset = hash[^1] & 0x0F;
-        var binary = ((hash[offset] & 0x7F) << 24)
-                   | ((hash[offset + 1] & 0xFF) << 16)
-                   | ((hash[offset + 2] & 0xFF) << 8)
-                   | (hash[offset + 3] & 0xFF);
-        return (binary % 1_000_000).ToString("D6");
-    }
-
-    private static byte[] DecodeBase32(string input)
-    {
-        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-        var cleaned = input.Trim().Replace(" ", "").Replace("-", "").TrimEnd('=').ToUpperInvariant();
-        var bytes = new List<byte>();
-        int buffer = 0, bitsLeft = 0;
-        foreach (var c in cleaned)
-        {
-            var val = alphabet.IndexOf(c);
-            if (val < 0) continue;
-            buffer = (buffer << 5) | val;
-            bitsLeft += 5;
-            if (bitsLeft >= 8)
-            {
-                bitsLeft -= 8;
-                bytes.Add((byte)((buffer >> bitsLeft) & 0xFF));
-            }
-        }
-        return bytes.ToArray();
     }
 }

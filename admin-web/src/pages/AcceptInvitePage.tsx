@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import QRCode from 'qrcode';
 import { ShieldCheck } from 'lucide-react';
 import { AdminProfile, ApiError, apiRequest } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -14,11 +13,6 @@ export function AcceptInvitePage({ token, onDone }: { token: string; onDone: () 
   } | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
-  const [mfaSetup, setMfaSetup] = useState<{ sharedKey: string; otpAuthUri: string } | null>(null);
-  const [qrUrl, setQrUrl] = useState('');
-  const [code, setCode] = useState('');
-  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
-  const [pendingSession, setPendingSession] = useState<{ admin: AdminProfile; csrf: string } | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -32,17 +26,12 @@ export function AcceptInvitePage({ token, onDone }: { token: string; onDone: () 
       .catch((err) => setError(err instanceof ApiError ? err.detail || err.code : 'Lời mời không hợp lệ hoặc đã hết hạn.'));
   }, [token]);
 
-  useEffect(() => {
-    if (!mfaSetup?.otpAuthUri) return;
-    QRCode.toDataURL(mfaSetup.otpAuthUri, { width: 196, margin: 1 }).then(setQrUrl).catch(() => {});
-  }, [mfaSetup]);
-
   const handleAccept = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setBusy(true);
     try {
-      const res = await apiRequest<{ sharedKey: string; otpAuthUri: string }>(
+      const res = await apiRequest<{ csrfToken: string; admin: AdminProfile }>(
         '/api/admin/auth/invitations/accept',
         {
           method: 'POST',
@@ -50,32 +39,12 @@ export function AcceptInvitePage({ token, onDone }: { token: string; onDone: () 
         },
         false,
       );
-      setMfaSetup(res);
       setPassword('');
+      setAdminSession(res.admin, res.csrfToken);
+      notify('Kích hoạt tài khoản quản trị thành công.', 'success');
+      onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.detail || err.code : 'Không thể xác nhận lời mời.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCompleteMfa = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setBusy(true);
-    try {
-      const res = await apiRequest<{ csrfToken: string; recoveryCodes: string[]; admin: AdminProfile }>(
-        '/api/admin/auth/invitations/complete-mfa',
-        {
-          method: 'POST',
-          body: JSON.stringify({ token, code: code.trim() }),
-        },
-        false,
-      );
-      setRecoveryCodes(res.recoveryCodes);
-      setPendingSession({ admin: res.admin, csrf: res.csrfToken });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail || err.code : 'Mã TOTP chưa đúng.');
     } finally {
       setBusy(false);
     }
@@ -88,7 +57,7 @@ export function AcceptInvitePage({ token, onDone }: { token: string; onDone: () 
           <span className="brand-dot">TM</span>
           <div>
             <h1 style={{ margin: 0, fontSize: 18 }}>Xác nhận lời mời TMusic Admin</h1>
-            <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Thiết lập tài khoản & MFA bắt buộc</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Thiết lập tài khoản quản trị</div>
           </div>
         </div>
 
@@ -100,7 +69,7 @@ export function AcceptInvitePage({ token, onDone }: { token: string; onDone: () 
 
         {!inspect && !error && <div className="skeleton" style={{ height: 120 }} />}
 
-        {inspect && !mfaSetup && !recoveryCodes && (
+        {inspect && (
           <form onSubmit={handleAccept}>
             <div className="notice-banner" style={{ marginBottom: 14 }}>
               <div>
@@ -119,53 +88,10 @@ export function AcceptInvitePage({ token, onDone }: { token: string; onDone: () 
               <input className="input" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
             <button className="btn btn-primary" style={{ width: '100%' }} disabled={busy}>
-              {busy ? 'Đang xử lý...' : 'Tiếp tục thiết lập MFA'}
-            </button>
-          </form>
-        )}
-
-        {mfaSetup && !recoveryCodes && (
-          <form onSubmit={handleCompleteMfa}>
-            {qrUrl && (
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, background: '#fff', padding: 10, borderRadius: 8 }}>
-                <img src={qrUrl} alt="QR TOTP" width={196} height={196} />
-              </div>
-            )}
-            <div className="form-field">
-              <label>Khóa bí mật TOTP</label>
-              <div className="input mono">{mfaSetup.sharedKey}</div>
-            </div>
-            <div className="form-field">
-              <label>Nhập mã 6 chữ số để hoàn tất cấp quyền</label>
-              <input className="input mono" required value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" />
-            </div>
-            <button className="btn btn-primary" style={{ width: '100%' }} disabled={busy}>
               <ShieldCheck size={15} />
               <span>{busy ? 'Đang kích hoạt...' : 'Hoàn tất & Vào Admin'}</span>
             </button>
           </form>
-        )}
-
-        {recoveryCodes && pendingSession && (
-          <div>
-            <div className="notice-banner notice-warning" style={{ marginBottom: 12 }}>
-              Lưu bộ 10 mã khôi phục MFA này ở nơi an toàn trước khi tiếp tục.
-            </div>
-            <div className="mono" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: 12, background: 'var(--bg)', borderRadius: 8, marginBottom: 14 }}>
-              {recoveryCodes.map((c) => <div key={c}>{c}</div>)}
-            </div>
-            <button
-              className="btn btn-primary"
-              style={{ width: '100%' }}
-              onClick={() => {
-                setAdminSession(pendingSession.admin, pendingSession.csrf);
-                notify('Kích hoạt tài khoản quản trị thành công.', 'success');
-                onDone();
-              }}
-            >
-              Vào bảng điều khiển
-            </button>
-          </div>
         )}
       </div>
     </div>

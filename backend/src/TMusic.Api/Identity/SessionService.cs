@@ -60,11 +60,11 @@ public sealed class SessionService(TMusicDb db, IConfiguration config, TimeProvi
         var previous = await db.UserSessions.AsNoTracking().SingleOrDefaultAsync(s => s.RefreshTokenHash == hash, ct);
         var now = time.GetUtcNow();
         if (previous is null || previous.ExpiresAt <= now) return null;
-        if (requireAdminSession && (!previous.IsAdminSession || !previous.MfaVerified)) return null;
+        if (requireAdminSession && !previous.IsAdminSession) return null;
 
         var account = await db.Users.AsNoTracking()
             .Where(u => u.Id == previous.UserId)
-            .Select(u => new { u.Id, u.DeletedAt, u.IsSuspended, u.SuspendedUntil, u.LockoutEnd, u.TwoFactorEnabled })
+            .Select(u => new { u.Id, u.DeletedAt, u.IsSuspended, u.SuspendedUntil, u.LockoutEnd })
             .FirstOrDefaultAsync(ct);
         if (account is null ||
             account.DeletedAt is not null ||
@@ -77,11 +77,6 @@ public sealed class SessionService(TMusicDb db, IConfiguration config, TimeProvi
 
         if (requireAdminSession)
         {
-            if (!account.TwoFactorEnabled)
-            {
-                await Revoke(previous.UserId, previous.FamilyId, ct);
-                return null;
-            }
             var hasAdminRole = await (
                 from ur in db.UserRoles.AsNoTracking()
                 join r in db.Roles.AsNoTracking() on ur.RoleId equals r.Id
