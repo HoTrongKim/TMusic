@@ -7,6 +7,11 @@ on:
         description: 'Địa chỉ HTTPS của API TMusic'
         required: true
         type: string
+      bundle_id:
+        description: 'Bundle ID iOS (mặc định com.tmusic.tmusic; đổi cho khớp Explicit App ID khi ký)'
+        required: false
+        default: 'com.tmusic.tmusic'
+        type: string
 
 permissions:
   contents: read
@@ -47,8 +52,28 @@ jobs:
           TMUSIC_BUILD_API_URL: ${{ inputs.api_url }}
           TMUSIC_GOOGLE_SERVER_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_SERVER_CLIENT_ID }}
           TMUSIC_GOOGLE_IOS_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_IOS_CLIENT_ID }}
+          TARGET_BUNDLE_ID: ${{ inputs.bundle_id || 'com.tmusic.tmusic' }}
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          bundle_id = os.environ["TARGET_BUNDLE_ID"].strip()
+          if not re.fullmatch(r"[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+", bundle_id):
+              raise SystemExit(f"Invalid bundle_id: {bundle_id!r}")
+          if bundle_id != "com.tmusic.tmusic":
+              pbx = Path("ios/Runner.xcodeproj/project.pbxproj")
+              text = pbx.read_text(encoding="utf-8")
+              old = "PRODUCT_BUNDLE_IDENTIFIER = com.tmusic.tmusic;"
+              count = text.count(old)
+              if count != 3:
+                  raise SystemExit(f"Expected 3 Runner PRODUCT_BUNDLE_IDENTIFIER entries, found {count}")
+              pbx.write_text(text.replace(old, f"PRODUCT_BUNDLE_IDENTIFIER = {bundle_id};"), encoding="utf-8")
+              print(f"Configured Runner PRODUCT_BUNDLE_IDENTIFIER = {bundle_id}")
+          else:
+              print("Using default Runner PRODUCT_BUNDLE_IDENTIFIER = com.tmusic.tmusic")
+          PY
           python3 ../scripts/prepare_mobile_oauth.py \
             --platform ios \
             --output "$RUNNER_TEMP/tmusic-ios-public-defines.json" \
@@ -62,6 +87,7 @@ jobs:
           TMUSIC_BUILD_API_URL: ${{ inputs.api_url }}
           TMUSIC_GOOGLE_SERVER_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_SERVER_CLIENT_ID }}
           TMUSIC_GOOGLE_IOS_CLIENT_ID: ${{ secrets.TMUSIC_GOOGLE_IOS_CLIENT_ID }}
+          TARGET_BUNDLE_ID: ${{ inputs.bundle_id || 'com.tmusic.tmusic' }}
         run: |
           set -euo pipefail
           flutter build ios --simulator --debug --no-codesign --no-pub \
@@ -71,16 +97,59 @@ jobs:
           xcrun simctl boot "$device" 2>/dev/null || true
           xcrun simctl bootstatus "$device" -b
           xcrun simctl install "$device" build/ios/iphonesimulator/Runner.app
-          xcrun simctl launch "$device" com.tmusic.tmusic
+          xcrun simctl launch "$device" "$TARGET_BUNDLE_ID"
           sleep 8
-          xcrun simctl listapps "$device" | grep -F 'com.tmusic.tmusic'
-          xcrun simctl spawn "$device" launchctl list | grep -F 'com.tmusic.tmusic'
+          xcrun simctl listapps "$device" | grep -F "$TARGET_BUNDLE_ID"
+          xcrun simctl spawn "$device" launchctl list | grep -F "$TARGET_BUNDLE_ID"
 
       - name: Đóng gói IPA
+        env:
+          TARGET_BUNDLE_ID: ${{ inputs.bundle_id || 'com.tmusic.tmusic' }}
         run: |
           set -euo pipefail
+          rm -rf build/ios/iphoneos/Payload
           mkdir -p dist build/ios/iphoneos/Payload
           cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+          APP_DIR="build/ios/iphoneos/Payload/Runner.app"
+
+          # Chuẩn hóa IPA chưa ký sạch cho công cụ ký ngoài (ESign, zsign, Sideloadly, AltStore)
+          find "$APP_DIR" -name "_CodeSignature" -type d -exec rm -rf {} +
+          rm -f "$APP_DIR/embedded.mobileprovision"
+          if [ -d "$APP_DIR/Frameworks" ]; then
+            find "$APP_DIR/Frameworks" -maxdepth 2 \( -name "Headers" -o -name "PrivateHeaders" -o -name "Modules" \) -type d -exec rm -rf {} +
+          fi
+
+          for bin in \
+            "$APP_DIR/Runner" \
+            "$APP_DIR"/Frameworks/*.framework/* \
+            "$APP_DIR"/Frameworks/*.dylib; do
+            [ -f "$bin" ] || continue
+            if file "$bin" | grep -q "Mach-O"; then
+              if lipo -info "$bin" 2>/dev/null | grep -q "Architectures in the fat file"; then
+                lipo -thin arm64 "$bin" -output "${bin}.arm64"
+                mv "${bin}.arm64" "$bin"
+              fi
+              chmod 0755 "$bin"
+              codesign --remove-signature "$bin" 2>/dev/null || true
+              lipo -info "$bin"
+            fi
+          done
+
+          python3 - <<'PY'
+          import os, plistlib
+          from pathlib import Path
+
+          app_dir = Path("build/ios/iphoneos/Payload/Runner.app")
+          info = plistlib.loads((app_dir / "Info.plist").read_bytes())
+          expected_id = os.environ["TARGET_BUNDLE_ID"].strip()
+          assert info.get("CFBundleIdentifier") == expected_id, f"Bundle ID mismatch: {info.get('CFBundleIdentifier')} != {expected_id}"
+          assert info.get("CFBundleExecutable") == "Runner", f"Unexpected executable: {info.get('CFBundleExecutable')}"
+          assert info.get("MinimumOSVersion") == "15.0", f"Unexpected MinimumOSVersion: {info.get('MinimumOSVersion')}"
+          leftover_sigs = list(app_dir.rglob("_CodeSignature"))
+          assert not leftover_sigs, f"Leftover _CodeSignature found: {leftover_sigs}"
+          print(f"Verified clean unsigned Runner.app: CFBundleIdentifier={info['CFBundleIdentifier']}, version={info.get('CFBundleShortVersionString')} ({info.get('CFBundleVersion')}), MinimumOSVersion={info['MinimumOSVersion']}")
+          PY
+
           cd build/ios/iphoneos
           zip -qry ../../../dist/TMusic-unsigned.ipa Payload
 
