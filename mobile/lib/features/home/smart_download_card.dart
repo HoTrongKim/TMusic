@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/theme/tmusic_theme.dart';
 import '../../core/auth/external_auth.dart';
@@ -40,6 +41,7 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
   LinkPreview? _preview;
   String? _lastResolvedUrl;
   bool _busy = false;
+  String? _busyStageKey;
   bool _showRenameFields = false;
   Object? _error;
   String? _localUrlError;
@@ -174,6 +176,7 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
     final token = ++_resolveToken;
     setState(() {
       _busy = true;
+      _busyStageKey = 'downloadStageFetchingMetadata';
       _error = null;
       _localUrlError = null;
       _savedSong = null;
@@ -208,7 +211,10 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
       }
     } finally {
       if (mounted && token == _resolveToken) {
-        setState(() => _busy = false);
+        setState(() {
+          _busy = false;
+          _busyStageKey = null;
+        });
       }
     }
   }
@@ -229,6 +235,9 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _busy = true;
+      _busyStageKey = mp3Supported
+          ? 'downloadStagePreparing'
+          : 'downloadStageSaving';
       _error = null;
       _offlineSaved = false;
     });
@@ -277,7 +286,12 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
     } catch (e) {
       if (mounted) setState(() => _error = e);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _busyStageKey = null;
+        });
+      }
     }
   }
 
@@ -537,6 +551,13 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
               ),
               if (_busy) ...[
                 const SizedBox(height: 12),
+                if (_busyStageKey != null) ...[
+                  Text(
+                    context.tr(_busyStageKey!),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 6),
+                ],
                 const SmoothProgressBar(),
               ],
               if (_localUrlError != null) ...[
@@ -550,17 +571,85 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
               if (_savedSong case final saved?) ...[
                 const SizedBox(height: 12),
                 if (watchedJob != null && watchedJob.isActive) ...[
-                  Text(
-                    '${context.tr('downloadingMp3')} (${watchedJob.progressPercent}%)',
-                    style: Theme.of(context).textTheme.labelLarge,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          downloadStageLabel(context, watchedJob),
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () async {
+                          try {
+                            _directJobPoll?.cancel();
+                            await ref
+                                .read(libraryRepositoryProvider)
+                                .cancelOrDeleteDownloadJob(watchedJob.id);
+                            await ref
+                                .read(downloadJobsProvider.notifier)
+                                .refresh(silent: true);
+                          } catch (e) {
+                            if (mounted) setState(() => _error = e);
+                          }
+                        },
+                        icon: const Icon(Icons.close_rounded, size: 16),
+                        label: Text(context.tr('cancel')),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   SmoothProgressBar(percent: watchedJob.progressPercent),
                   const SizedBox(height: 12),
                 ] else if (watchedJob?.status == 'FAILED') ...[
                   Notice(
-                    downloadFailureText(context, watchedJob?.errorCode),
+                    watchedJob?.provider == 'youtube' &&
+                            watchedJob?.errorCode?.trim().toUpperCase() ==
+                                'SOURCE_ACCESS_CHECK_REQUIRED'
+                        ? context.tr('youtubeServerAccessHint')
+                        : downloadFailureText(context, watchedJob?.errorCode),
                     error: true,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (watchedJob?.isRetryable == true)
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final ownerId =
+                                ref.read(sessionProvider).value?.userId;
+                            try {
+                              final retried = await ref
+                                  .read(libraryRepositoryProvider)
+                                  .retryDownloadJob(watchedJob!.id);
+                              ref
+                                  .read(downloadJobsProvider.notifier)
+                                  .trackJob(retried, ownerId: ownerId);
+                              _watchJobUntilDone(saved, retried.id, ownerId);
+                            } catch (e) {
+                              if (mounted) setState(() => _error = e);
+                            }
+                          },
+                          icon: const Icon(Icons.refresh_rounded, size: 17),
+                          label: Text(context.tr('retry')),
+                        ),
+                      if (saved.url.isNotEmpty)
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            final uri = Uri.tryParse(saved.url);
+                            if (uri != null) {
+                              launchUrl(
+                                uri,
+                                mode: LaunchMode.externalApplication,
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.open_in_new_rounded, size: 17),
+                          label: Text(context.tr('openSource')),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 8),
                 ] else ...[

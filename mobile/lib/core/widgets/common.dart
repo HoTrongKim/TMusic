@@ -76,10 +76,30 @@ String downloadFailureText(BuildContext context, String? errorCode) {
     'AUDIO_DOWNLOAD_UNAVAILABLE' ||
     'AUDIO_ENGINE_UNAVAILABLE' ||
     'AUDIO_DOWNLOAD_BUSY' ||
+    'EXTERNAL_DOWNLOAD_URL_EXPIRED' ||
     'PROVIDER_TEMPORARILY_UNAVAILABLE' => 'sourceTemporarilyUnavailable',
     _ => 'mp3Failed',
   };
   return context.tr(key);
+}
+
+String downloadStageLabel(BuildContext context, AudioDownloadJob job) {
+  return switch (job.status) {
+    'COMPLETE' => context.tr('downloadStageSuccess'),
+    'QUEUED' => context.tr('downloadStagePreparing'),
+    'RUNNING' =>
+      job.progressPercent >= 90
+          ? '${context.tr('downloadStageConverting')} (${job.progressPercent}%)'
+          : job.progressPercent <= 5
+          ? context.tr('downloadStagePreparing')
+          : '${context.tr('downloadStageDownloading')} (${job.progressPercent}%)',
+    'CANCELED' => context.tr('downloadStageCanceled'),
+    'FAILED' =>
+      job.isAccessRestricted
+          ? context.tr('downloadStageAccessRestricted')
+          : context.tr('downloadStageFailed'),
+    _ => job.status,
+  };
 }
 
 String? formatDuration(int? seconds) {

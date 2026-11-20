@@ -90,6 +90,8 @@ public static class ProviderEndpoints
         GuestExtractRequest request,
         ISourceResolver resolver,
         IAudioExtractor extractor,
+        DownloadOrchestrator orchestrator,
+        HttpContext context,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.Url)) return ApiSupport.Problem("INVALID_SOURCE_URL");
@@ -105,7 +107,14 @@ public static class ProviderEndpoints
         try
         {
             var resolved = await resolver.ResolveAsync(request.Url, ct);
-            var mp3Path = await extractor.ExtractMp3Async(resolved.CanonicalUrl, tempDir, (_, _) => Task.CompletedTask, request.BitrateKbps, ct);
+            var download = await orchestrator.DownloadAudioAsync(
+                resolved.CanonicalUrl,
+                tempDir,
+                request.BitrateKbps,
+                context.TraceIdentifier,
+                (_, _) => Task.CompletedTask,
+                ct);
+            var mp3Path = download.Mp3FilePath;
             var info = new FileInfo(mp3Path);
             if (!info.Exists || info.Length is <= 16 or > AudioStorage.MaxAudioBytes)
                 return ApiSupport.Problem("INVALID_AUDIO_OUTPUT", 422);

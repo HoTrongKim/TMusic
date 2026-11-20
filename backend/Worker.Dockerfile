@@ -38,6 +38,7 @@ RUN set -eu; \
         chmod 0755 /usr/local/bin/deno; \
         deno --version > /dev/null; \
         ffmpeg -version > /dev/null; \
+        ffprobe -version > /dev/null; \
         rm -rf /var/lib/apt/lists/* ;; \
       false) ;; \
       *) echo 'INSTALL_AUDIO_TOOLS must be true or false.' >&2; exit 1 ;; \
@@ -49,6 +50,7 @@ RUN if [ "$INSTALL_AUDIO_TOOLS" = true ]; then \
       mv /usr/local/bin/yt-dlp /usr/local/lib/tmusic/yt-dlp.pyz; \
       install -m 0755 /opt/tmusic/yt_dlp_safe.py /usr/local/bin/yt-dlp; \
       test "$(yt-dlp --version)" = "$YT_DLP_VERSION"; \
+      python3 -c "import zipfile; z=zipfile.ZipFile('/usr/local/lib/tmusic/yt-dlp.pyz'); assert any('yt_dlp_ejs' in n for n in z.namelist()), 'Missing bundled yt_dlp_ejs'"; \
     fi
 WORKDIR /app
 COPY --from=build /out/ ./

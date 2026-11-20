@@ -134,6 +134,25 @@ app.UseAuthentication(); app.UseRateLimiter(); app.UseAuthorization();
 if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing")) app.MapOpenApi();
 app.MapHealthChecks("/health",new HealthCheckOptions {Predicate=_=>false});
 app.MapHealthChecks("/health/ready",new HealthCheckOptions {Predicate=x=>x.Tags.Contains("ready")});
+app.MapGet("/api/health/media",async (MediaDependencyHealthService mediaHealth,CancellationToken ct)=> {
+    var report=await mediaHealth.CheckAsync(ct);
+    return Results.Json(new {
+        status=report.Status,
+        ytDlp=report.YtDlp,
+        ffmpeg=report.Ffmpeg,
+        ffprobe=report.Ffprobe,
+        javascriptRuntime=report.JavascriptRuntime,
+        ejs=report.Ejs,
+        externalProvider=new {
+            provider=report.ExternalProvider.ProviderName,
+            enabled=report.ExternalProvider.Enabled,
+            configured=report.ExternalProvider.Configured,
+            status=report.ExternalProvider.Status
+        },
+        checkedAtUtc=report.CheckedAtUtc,
+        note=report.Note
+    },statusCode:report.Status=="healthy"?StatusCodes.Status200OK:StatusCodes.Status503ServiceUnavailable);
+});
 var api=app.MapGroup("/api/v1");
 api.MapGet("/system/capabilities",(IExternalTokenVerifier verifier,IAccountMailSender mail,SessionService sessions,IAudioExtractor extractor,IConfiguration c)=>Results.Ok(new {
     emailAuthentication=sessions.IsConfigured,passwordResetEmail=mail.IsConfigured,googleSignIn=verifier.Available("google"),appleSignIn=verifier.Available("apple"),
@@ -169,6 +188,7 @@ public sealed class ApiDownloadBackgroundRunner(IServiceScopeFactory scopes,ICon
                 logger.LogWarning("Audio tools startup validation failed with {ErrorType}.", error.GetType().Name);
             }
         }
+        AudioTempWorkspace.CleanupStaleDirectories(TimeSpan.FromHours(2));
         var nextCleanup = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -179,10 +199,12 @@ public sealed class ApiDownloadBackgroundRunner(IServiceScopeFactory scopes,ICon
                 if (!runDownloads && !runImports) { await Task.Delay(TimeSpan.FromSeconds(5),stoppingToken); continue; }
                 await using var scope=scopes.CreateAsyncScope();
                 var imports = runImports ? scope.ServiceProvider.GetRequiredService<ImportProcessor>() : null;
-                var now = scope.ServiceProvider.GetRequiredService<TimeProvider>().GetUtcNow();
-                if (imports is not null && now >= nextCleanup)
+                var clock = scope.ServiceProvider.GetRequiredService<TimeProvider>();
+                var now = clock.GetUtcNow();
+                if (now >= nextCleanup)
                 {
-                    await imports.PurgeExpiredAsync(stoppingToken);
+                    if (imports is not null) await imports.PurgeExpiredAsync(stoppingToken);
+                    AudioTempWorkspace.CleanupStaleDirectories(TimeSpan.FromHours(2), clock);
                     nextCleanup = now.AddMinutes(5);
                 }
                 if (runDownloads && await scope.ServiceProvider.GetRequiredService<AudioDownloadQueueRunner>().ProcessAvailableAsync(stoppingToken)) continue;

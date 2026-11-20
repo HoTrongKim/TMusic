@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using TMusic.Api.Common;
+using TMusic.Application.Downloads;
 using TMusic.Domain.Entities;
 using TMusic.Infrastructure.Downloads;
 using TMusic.Infrastructure.Persistence;
@@ -31,6 +33,7 @@ public static class AudioDownloadEndpoints
         TMusicDb db,
         IAudioExtractor extractor,
         IAudioStorage storage,
+        IOptions<AudioDownloadOptions> options,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -88,6 +91,13 @@ public static class AudioDownloadEndpoints
             .FirstOrDefaultAsync(ct);
         if (active is not null)
             return Results.Accepted($"/api/v1/downloads/{active.Id}", ToView(active, entry));
+
+        var userActiveCount = await db.AudioDownloadJobs
+            .AsNoTracking()
+            .CountAsync(x => x.OwnerId == user &&
+                             (x.Status == ImportStatus.Queued || x.Status == ImportStatus.Running), ct);
+        if (userActiveCount >= options.Value.EffectiveMaxActivePerUser)
+            return ApiSupport.Problem("AUDIO_DOWNLOAD_BUSY", 429, "Bạn đang có nhiều tiến trình tải MP3 hoạt động cùng lúc. Vui lòng chờ một tiến trình hoàn tất.");
 
         var job = new AudioDownloadJob
         {
@@ -319,6 +329,9 @@ public static class AudioDownloadEndpoints
             : (!string.IsNullOrWhiteSpace(song.CustomTitle) ? song.CustomTitle : song.Song?.OriginalTitle);
         var retryable = job.Status == ImportStatus.Canceled ||
             (job.Status == ImportStatus.Failed && YtDlpAudioExtractor.IsRetryableErrorCode(job.ErrorCode));
+        var classification = job.Status == ImportStatus.Failed && !string.IsNullOrWhiteSpace(job.ErrorCode)
+            ? DownloadErrorClassifier.ClassifyErrorCode(job.ErrorCode)
+            : null;
         return new
         {
             job.Id,
@@ -330,6 +343,8 @@ public static class AudioDownloadEndpoints
             job.Status,
             job.ProgressPercent,
             job.ErrorCode,
+            errorCategory = classification?.Category.ToString(),
+            accessRestricted = classification?.IsAccessRestriction ?? false,
             retryable,
             bitrateKbps = job.BitrateKbps,
             audioReady,

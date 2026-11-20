@@ -483,8 +483,11 @@ public static class AdminOperationsEndpoints
         try
         {
             var tempRoot = Path.GetTempPath();
-            foreach (var dir in Directory.EnumerateDirectories(tempRoot, "tmusic-audio-*"))
-                total += MeasureDirectoryBytes(dir);
+            foreach (var prefix in AudioTempWorkspace.TempPrefixes)
+            {
+                foreach (var dir in Directory.EnumerateDirectories(tempRoot, prefix + "*"))
+                    total += MeasureDirectoryBytes(dir);
+            }
         }
         catch (IOException) { }
         return total;

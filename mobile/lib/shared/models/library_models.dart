@@ -289,6 +289,8 @@ class AudioDownloadJob {
     this.songTitle,
     this.songArtist,
     this.errorCode,
+    this.errorCategory,
+    this.accessRestricted,
     this.retryable,
     this.bitrateKbps,
     this.audioStreamUrl,
@@ -298,11 +300,18 @@ class AudioDownloadJob {
   final String id, songId, provider, canonicalUrl, status;
   final int progressPercent;
   final bool audioReady;
-  final String? songTitle, songArtist, errorCode, audioStreamUrl;
-  final bool? retryable;
+  final String? songTitle, songArtist, errorCode, errorCategory, audioStreamUrl;
+  final bool? accessRestricted, retryable;
   final int? bitrateKbps, outputSizeBytes;
 
   bool get isActive => status == 'QUEUED' || status == 'RUNNING';
+  bool get isAccessRestricted =>
+      accessRestricted == true ||
+      const {
+        'SOURCE_ACCESS_CHECK_REQUIRED',
+        'SOURCE_AUTHENTICATION_REQUIRED',
+        'SOURCE_ACCESS_FORBIDDEN',
+      }.contains(errorCode?.trim().toUpperCase());
   bool get isRetryable =>
       status == 'CANCELED' ||
       (status == 'FAILED' &&
@@ -319,6 +328,8 @@ class AudioDownloadJob {
     status: j['status'] as String? ?? 'QUEUED',
     progressPercent: (j['progressPercent'] as num?)?.toInt() ?? 0,
     errorCode: j['errorCode'] as String?,
+    errorCategory: j['errorCategory'] as String?,
+    accessRestricted: j['accessRestricted'] as bool?,
     retryable: j['retryable'] as bool?,
     bitrateKbps: (j['bitrateKbps'] as num?)?.toInt(),
     audioReady: j['audioReady'] == true,

@@ -29,6 +29,7 @@ internal sealed class ImportWorker(IServiceScopeFactory scopeFactory, TimeProvid
                 logger.LogWarning("Worker audio tool validation failed with {ErrorType}.", error.GetType().Name);
             }
         }
+        AudioTempWorkspace.CleanupStaleDirectories(TimeSpan.FromHours(2), clock);
         var nextCleanup = clock.GetUtcNow();
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -40,6 +41,7 @@ internal sealed class ImportWorker(IServiceScopeFactory scopeFactory, TimeProvid
                 if (clock.GetUtcNow() >= nextCleanup)
                 {
                     await processor.PurgeExpiredAsync(stoppingToken);
+                    AudioTempWorkspace.CleanupStaleDirectories(TimeSpan.FromHours(2), clock);
                     nextCleanup = clock.GetUtcNow().AddMinutes(5);
                 }
                 if (await downloads.ProcessAvailableAsync(stoppingToken)) continue;

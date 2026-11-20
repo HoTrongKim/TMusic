@@ -6,6 +6,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using TMusic.Application.Downloads;
 using TMusic.Application.Providers;
 using TMusic.Domain.Entities;
 using TMusic.Infrastructure.Persistence;
@@ -82,6 +83,11 @@ public sealed partial class YtDlpAudioExtractor(
     public string? ResolveFfmpegPath() => ResolveBinary(
         config["AudioDownload:FfmpegPath"],
         OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg",
+        "*FFmpeg*");
+
+    public string? ResolveFfprobePath() => ResolveBinary(
+        config["AudioDownload:FfprobePath"],
+        OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe",
         "*FFmpeg*");
 
     public string? ResolveDenoPath() => ResolveBinary(
@@ -164,100 +170,11 @@ public sealed partial class YtDlpAudioExtractor(
         return arguments;
     }
 
-    public static ProviderException ClassifyFailure(string provider, string standardError)
-    {
-        if (standardError.Contains("TMUSIC_YTDLP_COMPATIBILITY_ERROR", StringComparison.Ordinal))
-            return new ProviderException("AUDIO_ENGINE_UNAVAILABLE");
-        if (standardError.Contains("TMUSIC_SOURCE_ACCESS_CHECK_REQUIRED", StringComparison.Ordinal))
-            return new ProviderException("SOURCE_ACCESS_CHECK_REQUIRED");
-        if (standardError.Contains("TMUSIC_SOURCE_AUDIO_UNAVAILABLE", StringComparison.Ordinal))
-            return new ProviderException("SOURCE_AUDIO_UNAVAILABLE");
+    public static ProviderException ClassifyFailure(string provider, string standardError) =>
+        DownloadErrorClassifier.Classify(provider, standardError).ToProviderException();
 
-        if (standardError.Contains("Sign in to confirm you're not a bot", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("Sign in to confirm you\u2019re not a bot", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("not a bot", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("access check required", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("SOURCE_ACCESS_CHECK_REQUIRED");
-
-        if (standardError.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("login required", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("authentication required", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("HTTP Error 401", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("SOURCE_AUTHENTICATION_REQUIRED");
-
-        if (standardError.Contains("Requested format is not available", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("No video formats found", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("SOURCE_AUDIO_UNAVAILABLE");
-
-        if (standardError.Contains("HTTP Error 403", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("SOURCE_ACCESS_FORBIDDEN");
-
-        var nonRetryable = standardError.Contains("DRM", StringComparison.OrdinalIgnoreCase) ||
-                           standardError.Contains("Private video", StringComparison.OrdinalIgnoreCase) ||
-                           standardError.Contains("members-only", StringComparison.OrdinalIgnoreCase) ||
-                           standardError.Contains("Video unavailable", StringComparison.OrdinalIgnoreCase) ||
-                           standardError.Contains("This video is unavailable", StringComparison.OrdinalIgnoreCase) ||
-                           standardError.Contains("File is larger than max-filesize", StringComparison.OrdinalIgnoreCase);
-        if (nonRetryable)
-            return new ProviderException("SOURCE_RESTRICTED_OR_UNSUPPORTED");
-
-        if (standardError.Contains("HTTP Error 429", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("Too Many Requests", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("RATE_LIMITED", retryable: true);
-
-        if (standardError.Contains("HTTP Error 408", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("HTTP Error 500", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("HTTP Error 502", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("HTTP Error 503", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("HTTP Error 504", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("connection reset", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("Temporary failure in name resolution", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("Name or service not known", StringComparison.OrdinalIgnoreCase) ||
-            standardError.Contains("network is unreachable", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("SOURCE_NETWORK_ERROR", retryable: true);
-
-        if (standardError.Contains("Unable to extract", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("SOURCE_RESPONSE_UNSUPPORTED");
-
-        if (provider == "tiktok" &&
-            standardError.Contains("Unexpected response from webpage request", StringComparison.OrdinalIgnoreCase))
-            return new ProviderException("SOURCE_RESPONSE_UNSUPPORTED");
-
-        return new ProviderException("AUDIO_EXTRACTION_FAILED", retryable: true);
-    }
-
-    public static bool IsRetryableErrorCode(string? errorCode) => errorCode?.Trim().ToUpperInvariant() switch
-    {
-        "SOURCE_ACCESS_CHECK_REQUIRED" or
-        "SOURCE_AUTHENTICATION_REQUIRED" or
-        "SOURCE_ACCESS_FORBIDDEN" or
-        "SOURCE_AUDIO_UNAVAILABLE" or
-        "SOURCE_RESTRICTED_OR_UNSUPPORTED" or
-        "SOURCE_RESPONSE_UNSUPPORTED" or
-        "SOURCE_UNAVAILABLE" or
-        "AUDIO_CONVERSION_FAILED" or
-        "AUDIO_STORAGE_REJECTED" or
-        "AUDIO_FILE_INVALID" or
-        "AUDIO_FORMAT_INVALID" or
-        "AUDIO_PATH_INVALID" or
-        "AUDIO_INPUT_INVALID" or
-        "AUDIO_ENGINE_UNAVAILABLE" or
-        "RIGHTS_CONFIRMATION_REQUIRED" or
-        "INVALID_SOURCE_URL" or
-        "UNSUPPORTED_SOURCE_URL" or
-        "INVALID_BITRATE" => false,
-        "AUDIO_DOWNLOAD_TIMEOUT" or
-        "AUDIO_DOWNLOAD_BUSY" or
-        "AUDIO_EXTRACTION_FAILED" or
-        "NETWORK_ERROR" or
-        "SOURCE_NETWORK_ERROR" or
-        "TEMPORARY_FAILURE" or
-        "PROVIDER_TEMPORARILY_UNAVAILABLE" or
-        "AUDIO_STORAGE_UNAVAILABLE" or
-        "RATE_LIMITED" => true,
-        _ => false
-    };
+    public static bool IsRetryableErrorCode(string? errorCode) =>
+        DownloadErrorClassifier.IsRetryableErrorCode(errorCode);
 
     public Task<string> ExtractMp3Async(
         string canonicalUrl,
@@ -332,7 +249,8 @@ public sealed class AudioDownloadProcessor(
     IAudioExtractor extractor,
     IAudioStorage storage,
     TimeProvider clock,
-    IOptions<AudioDownloadOptions> options)
+    IOptions<AudioDownloadOptions> options,
+    DownloadOrchestrator? orchestrator = null)
 {
     public async Task<bool> ProcessOneAsync(CancellationToken ct)
     {
@@ -440,22 +358,38 @@ public sealed class AudioDownloadProcessor(
         string mp3Path;
         try
         {
-            mp3Path = await extractor.ExtractMp3Async(
-                job.CanonicalUrl,
-                tempDir,
-                async (pct, innerCt) =>
-                {
-                    var beat = clock.GetUtcNow();
-                    var changed = await db.AudioDownloadJobs
-                        .Where(x => x.Id == job.Id && x.LeaseOwner == job.LeaseOwner && x.Status == ImportStatus.Running)
-                        .ExecuteUpdateAsync(s => s
-                            .SetProperty(x => x.ProgressPercent, pct)
-                            .SetProperty(x => x.HeartbeatAt, beat)
-                            .SetProperty(x => x.LeaseUntil, beat.Add(options.Value.EffectiveLease)), innerCt);
-                    if (changed == 0) throw new OperationCanceledException("Audio download lease was revoked.", innerCt);
-                },
-                job.BitrateKbps,
-                ct);
+            Func<int, CancellationToken, Task> reportProgress = async (pct, innerCt) =>
+            {
+                var beat = clock.GetUtcNow();
+                var changed = await db.AudioDownloadJobs
+                    .Where(x => x.Id == job.Id && x.LeaseOwner == job.LeaseOwner && x.Status == ImportStatus.Running)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(x => x.ProgressPercent, pct)
+                        .SetProperty(x => x.HeartbeatAt, beat)
+                        .SetProperty(x => x.LeaseUntil, beat.Add(options.Value.EffectiveLease)), innerCt);
+                if (changed == 0) throw new OperationCanceledException("Audio download lease was revoked.", innerCt);
+            };
+
+            if (orchestrator is not null)
+            {
+                var result = await orchestrator.DownloadAudioAsync(
+                    job.CanonicalUrl,
+                    tempDir,
+                    job.BitrateKbps,
+                    job.Id.ToString("N"),
+                    reportProgress,
+                    ct);
+                mp3Path = result.Mp3FilePath;
+            }
+            else
+            {
+                mp3Path = await extractor.ExtractMp3Async(
+                    job.CanonicalUrl,
+                    tempDir,
+                    reportProgress,
+                    job.BitrateKbps,
+                    ct);
+            }
         }
         catch (Exception error) when (error is HttpRequestException or IOException or SocketException)
         {

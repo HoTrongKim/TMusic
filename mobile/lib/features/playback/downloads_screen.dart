@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/theme/tmusic_theme.dart';
 import '../../core/auth/session.dart';
@@ -309,16 +310,18 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                   ),
                 ),
               ...(jobsAsync.value ?? const <AudioDownloadJob>[]).map((job) {
-                final statusLabel = switch (job.status) {
-                  'COMPLETE' => context.tr('mp3ReadyBadge'),
-                  'RUNNING' || 'QUEUED' =>
-                    '${context.tr('downloadingMp3')} (${job.progressPercent}%)',
-                  'FAILED' => downloadFailureText(context, job.errorCode),
-                  _ => job.status,
-                };
+                final statusLabel = downloadStageLabel(context, job);
+                final failureDetail = job.status == 'FAILED'
+                    ? (job.provider == 'youtube' &&
+                              job.errorCode?.trim().toUpperCase() ==
+                                  'SOURCE_ACCESS_CHECK_REQUIRED'
+                          ? context.tr('youtubeServerAccessHint')
+                          : downloadFailureText(context, job.errorCode))
+                    : null;
                 final statusColor = switch (job.status) {
                   'COMPLETE' => tokens?.success ?? scheme.primary,
                   'FAILED' => scheme.error,
+                  'CANCELED' => scheme.onSurfaceVariant,
                   _ => scheme.primary,
                 };
                 return Padding(
@@ -432,35 +435,101 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
                             ],
                           ),
                           const SizedBox(height: 10),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: statusColor.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              statusLabel,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    color: statusColor,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 11.5,
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 6,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: statusColor.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  statusLabel,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: statusColor,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 11.5,
+                                      ),
+                                ),
+                              ),
+                              if (job.status == 'COMPLETE' && job.audioReady)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
                                   ),
-                            ),
+                                  decoration: BoxDecoration(
+                                    color: scheme.surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    context.tr('mp3ReadyBadge'),
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: scheme.onSurfaceVariant,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 11.5,
+                                        ),
+                                  ),
+                                ),
+                            ],
                           ),
+                          if (failureDetail != null) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              failureDetail,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ],
                           if (job.isActive) ...[
                             const SizedBox(height: 10),
                             SmoothProgressBar(percent: job.progressPercent),
                           ],
-                          if (job.isRetryable) ...[
+                          if (job.isRetryable || job.status == 'FAILED') ...[
                             const SizedBox(height: 10),
-                            OutlinedButton.icon(
-                              onPressed: _acting ? null : () => _retryJob(job),
-                              icon: const Icon(Icons.refresh_rounded, size: 18),
-                              label: Text(context.tr('retry')),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                if (job.isRetryable)
+                                  OutlinedButton.icon(
+                                    onPressed: _acting
+                                        ? null
+                                        : () => _retryJob(job),
+                                    icon: const Icon(
+                                      Icons.refresh_rounded,
+                                      size: 18,
+                                    ),
+                                    label: Text(context.tr('retry')),
+                                  ),
+                                if (job.status == 'FAILED' &&
+                                    job.canonicalUrl.isNotEmpty)
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      final uri = Uri.tryParse(
+                                        job.canonicalUrl,
+                                      );
+                                      if (uri != null) {
+                                        launchUrl(
+                                          uri,
+                                          mode: LaunchMode.externalApplication,
+                                        );
+                                      }
+                                    },
+                                    icon: const Icon(
+                                      Icons.open_in_new_rounded,
+                                      size: 17,
+                                    ),
+                                    label: Text(context.tr('openSource')),
+                                  ),
+                              ],
                             ),
                           ],
                         ],
