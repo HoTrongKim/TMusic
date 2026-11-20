@@ -13,6 +13,7 @@ import '../../core/widgets/motion.dart';
 import '../../shared/models/library_models.dart';
 import '../library/library_repository.dart';
 import 'local_audio.dart';
+import 'on_device_download_manager.dart';
 
 final downloadJobsProvider =
     AsyncNotifierProvider<DownloadJobsController, List<AudioDownloadJob>>(
@@ -40,6 +41,7 @@ final songDownloadJobProvider = Provider.family<AudioDownloadJob?, String>((
 
 class DownloadJobsController extends AsyncNotifier<List<AudioDownloadJob>> {
   Timer? _pollTimer;
+  StreamSubscription<({String ownerKey, AudioDownloadJob job})>? _localSub;
   final Set<String> _syncingSongIds = <String>{};
   int _generation = 0;
   int _requestSequence = 0;
@@ -59,10 +61,19 @@ class DownloadJobsController extends AsyncNotifier<List<AudioDownloadJob>> {
     ref.watch(libraryRevisionProvider);
     final generation = ++_generation;
     final ownerId = session.$2;
+    final ownerKey = ownerId ?? 'guest';
     _pollTimer?.cancel();
+    _localSub?.cancel();
+    final onDevice = ref.read(onDeviceDownloadManagerProvider);
+    _localSub = onDevice.updates.listen((event) {
+      if (event.ownerKey == ownerKey && _current(generation, ownerId)) {
+        trackJob(event.job, ownerId: ownerId);
+      }
+    });
     ref.onDispose(() {
       _generation++;
       _pollTimer?.cancel();
+      _localSub?.cancel();
     });
     if (_initialized && _ownerId != ownerId) {
       // AsyncLoading preserves its previous value; replace it with an empty
@@ -129,7 +140,9 @@ class DownloadJobsController extends AsyncNotifier<List<AudioDownloadJob>> {
   ) {
     if (!_current(generation, ownerId)) return;
     _pollTimer?.cancel();
-    if (jobs.any((j) => j.isActive)) {
+    if (jobs.any(
+      (j) => j.isActive && !OnDeviceDownloadManager.isLocalJobId(j.id),
+    )) {
       _pollTimer = Timer(const Duration(milliseconds: 1400), () {
         if (_current(generation, ownerId)) refresh(silent: true);
       });
@@ -149,6 +162,7 @@ class DownloadJobsController extends AsyncNotifier<List<AudioDownloadJob>> {
       var syncedAny = false;
       for (final j in jobs) {
         if (!_current(generation, ownerId)) return;
+        if (OnDeviceDownloadManager.isLocalJobId(j.id)) continue;
         final syncKey = '$generation:${j.songId}';
         if (j.audioReady &&
             !_syncingSongIds.contains(syncKey) &&

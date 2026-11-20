@@ -437,3 +437,23 @@ Hoàn thành theo bốn yêu cầu giao diện/lỗi đăng nhập của ngườ
   - `flutter analyze --no-pub`: **No issues found**; `flutter test --no-pub --reporter compact`: **123 passed, 0 failed**.
   - Live Railway production (`tmusic-api` hiện tại): `RAILWAY_SOURCE_ACCESS_BLOCKED` (HTTP 422 `SOURCE_ACCESS_CHECK_REQUIRED` từ YouTube trên IP datacenter); chưa deploy production mới khi chưa được người dùng phê duyệt.
   - `.env` không bị chạm, đọc hay commit; `TMusicDev` không bị tác động.
+
+
+## 2026-11-20 — Tích hợp tải âm thanh YouTube trực tiếp trên ứng dụng Flutter (0 đồng, Backend 100% Railway)
+
+- **Kiến trúc & lý do:** Để tránh chi phí credit của provider ngoài (`MediaProviders__External__Enabled=false` đã tắt trên Railway) và giữ toàn bộ backend (`tmusic-api`, `tmusic-sql`, `tmusic-admin`) chạy 100% trên Railway, bước tải audio YouTube được chuyển sang chạy trực tiếp trên thiết bị người dùng trong ứng dụng Flutter bằng mạng Wi-Fi/4G của máy. Tài khoản, album, đồng bộ thư viện, chia sẻ album và tải TikTok/SoundCloud tiếp tục chạy qua Railway API như cũ.
+- **Triển khai Flutter:**
+  - Thêm dependency `youtube_explode_dart: ^3.1.0` vào `mobile/pubspec.yaml`.
+  - Tạo `mobile/lib/features/playback/on_device_youtube_downloader.dart` (`YoutubeExplodeOnDeviceDownloader`): tải audio-only stream bằng profile `visionOS` (giữ `WatchPage` mặc định để lấy visitor context, có fallback `androidSdkless`), phát sự kiện tiến độ 5%→95%, hỗ trợ hủy an toàn, giới hạn 100 MB, kiểm tra độ dài và magic header (`ftyp` / `ID3` / `EBML`), dọn file `.part` khi lỗi hoặc hủy.
+  - Tạo `mobile/lib/features/playback/on_device_download_manager.dart` (`OnDeviceDownloadManager`): quản lý job `local-yt-*` cô lập theo từng tài khoản/khách, chống trùng lặp, stream tiến độ theo thời gian thực, hỗ trợ Hủy và Thử lại.
+  - Mở rộng `mobile/lib/features/playback/local_audio.dart` (`LocalLibrary`): hỗ trợ lưu, tìm, xác thực header, sao chép và xóa tệp `.mp3`, `.m4a`, `.webm` phát native qua `just_audio` (ExoPlayer trên Android, AVPlayer trên iOS) mà không cần nhúng FFmpeg vào app.
+  - Cập nhật `mobile/lib/features/library/library_repository.dart`: định tuyến tải YouTube (cả chế độ Khách và Tài khoản) qua `OnDeviceDownloadManager`, ghép job cục bộ với job server trong `downloadJobs()`, và bổ sung `_hydrateSongsWithLocalAudio` để `HomeScreen`, `LibraryScreen`, `AlbumDetailScreen`, `SongScreen`, `SearchScreen` hiển thị đúng trạng thái `audioReady` ngay cả sau khi khởi động lại app.
+  - Cập nhật `mobile/lib/features/home/smart_download_card.dart`, `mobile/lib/features/playback/downloads_screen.dart`, `mobile/lib/features/songs/song_screen.dart` để cập nhật tiến độ tức thì từ stream cục bộ.
+- **Kiểm chứng thực tế & tự động:**
+  - `flutter analyze --no-pub`: **No issues found! (ran in 7.1s)**.
+  - `flutter test --no-pub --reporter compact`: **126 passed, 0 failed** (bao gồm `test/on_device_youtube_download_test.dart` kiểm thử header validation, phân loại lỗi, cô lập tài khoản, chống trùng lặp, hủy & thử lại).
+  - Live end-to-end test với `YoutubeExplodeOnDeviceDownloader(enabled: true)` trên 2 URL YouTube CC BY 3.0 công khai:
+    1. `https://www.youtube.com/watch?v=aqz-KE-bpKQ` (*Big Buck Bunny 60fps*): tải thành công `10,271,496 bytes` `.m4a` trong `4.23s` (87 bước tiến độ); `ffprobe` xác nhận `codec_name=aac`, `codec_type=audio`, `duration=634.62s`, `bit_rate=129481`.
+    2. `https://www.youtube.com/watch?v=YE7VzlLtp-4` (*Big Buck Bunny Classic*): tải thành công `9,655,276 bytes` `.m4a` trong `3.33s` (87 bước tiến độ); `ffprobe` xác nhận `codec_name=aac`, `codec_type=audio`, `duration=596.52s`, `bit_rate=129487`.
+  - Railway `tmusic-api`: xác nhận `MediaProviders__External__Enabled=false` đang hoạt động (0 chi phí credit ngoài).
+  - Chưa build lại APK/IPA trong lượt này; `.env` và `TMusicDev` không bị tác động.

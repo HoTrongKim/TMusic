@@ -66,21 +66,58 @@ class LocalLibrary {
     return LocalLibrary(dir, db);
   }
 
-  File? _songFile(String songId) {
+  static const List<String> _songExtensions = ['mp3', 'm4a', 'webm'];
+
+  File? _songFile(String songId, {String extension = 'mp3'}) {
     final dir = directory;
     if (dir == null) return null;
     final clean = songId.replaceAll(RegExp('[^a-zA-Z0-9-]'), '');
-    return File('${dir.path}/song_$clean.mp3');
+    final ext = _songExtensions.contains(extension.toLowerCase())
+        ? extension.toLowerCase()
+        : 'mp3';
+    return File('${dir.path}/song_$clean.$ext');
   }
 
-  Future<bool> hasDownloadedSong(String songId) async {
-    final f = _songFile(songId);
-    return f != null && await f.exists() && await f.length() > 16;
+  Future<File?> _findSongFile(String songId) async {
+    for (final ext in _songExtensions) {
+      final candidate = _songFile(songId, extension: ext);
+      if (candidate != null &&
+          await candidate.exists() &&
+          await candidate.length() > 16) {
+        return candidate;
+      }
+    }
+    return null;
   }
+
+  static bool isValidAudioHeader(Uint8List header, String extension) {
+    if (header.length < 12) return false;
+    switch (extension.toLowerCase()) {
+      case 'mp3':
+        return (header[0] == 0x49 && header[1] == 0x44 && header[2] == 0x33) ||
+            (header[0] == 0xFF && (header[1] & 0xE0) == 0xE0);
+      case 'm4a':
+      case 'mp4':
+        return header[4] == 0x66 &&
+            header[5] == 0x74 &&
+            header[6] == 0x79 &&
+            header[7] == 0x70;
+      case 'webm':
+        return header[0] == 0x1A &&
+            header[1] == 0x45 &&
+            header[2] == 0xDF &&
+            header[3] == 0xA3;
+      default:
+        return false;
+    }
+  }
+
+  Future<bool> hasDownloadedSong(String songId) async =>
+      (await _findSongFile(songId)) != null;
 
   Future<LocalTrack?> getDownloadedSongTrack(Song song) async {
-    final f = _songFile(song.id);
-    if (f == null || !await f.exists() || await f.length() <= 16) return null;
+    final f = await _findSongFile(song.id);
+    if (f == null) return null;
     return LocalTrack(
       'song:${song.id}',
       song.title,
@@ -101,13 +138,83 @@ class LocalLibrary {
     if (bytes.length <= 16) {
       throw const FormatException('Dữ liệu MP3 tải về không hợp lệ.');
     }
-    final out = _songFile(song.id)!;
+    await _deleteAlternateSongFiles(song.id, keepExtension: 'mp3');
+    final out = _songFile(song.id, extension: 'mp3')!;
     await out.writeAsBytes(bytes, flush: true);
     return _indexSongTrack(database, song, out);
   }
 
+  Future<LocalTrack> saveDownloadedSongFile(
+    Song song,
+    File tempFile, {
+    required String extension,
+  }) async {
+    final dir = directory;
+    final database = db;
+    if (dir == null || database == null) {
+      throw const FormatException(
+        'Bộ nhớ cục bộ không khả dụng trong môi trường kiểm thử.',
+      );
+    }
+    final normalizedExt = extension.toLowerCase() == 'mp4'
+        ? 'm4a'
+        : extension.toLowerCase();
+    if (!_songExtensions.contains(normalizedExt)) {
+      throw const FormatException('Định dạng âm thanh không được hỗ trợ.');
+    }
+    if (!await tempFile.exists()) {
+      throw const FormatException('Tệp âm thanh tạm không tồn tại.');
+    }
+    final length = await tempFile.length();
+    if (length <= 16 || length > 100 * 1024 * 1024) {
+      throw const FormatException('Kích thước tệp âm thanh không hợp lệ.');
+    }
+    final raf = await tempFile.open();
+    Uint8List header;
+    try {
+      header = await raf.read(16);
+    } finally {
+      await raf.close();
+    }
+    if (!isValidAudioHeader(header, normalizedExt)) {
+      throw const FormatException('Nội dung tệp âm thanh không hợp lệ.');
+    }
+    await _deleteAlternateSongFiles(song.id, keepExtension: normalizedExt);
+    final out = _songFile(song.id, extension: normalizedExt)!;
+    final staging = File('${out.path}.staging');
+    try {
+      await tempFile.copy(staging.path);
+      if (await out.exists()) await out.delete();
+      await staging.rename(out.path);
+    } finally {
+      if (await staging.exists()) {
+        try {
+          await staging.delete();
+        } catch (_) {}
+      }
+    }
+    return _indexSongTrack(database, song, out);
+  }
+
+  Future<void> _deleteAlternateSongFiles(
+    String songId, {
+    String? keepExtension,
+  }) async {
+    for (final ext in _songExtensions) {
+      if (ext == keepExtension) continue;
+      final old = _songFile(songId, extension: ext);
+      if (old != null && await old.exists()) {
+        try {
+          await old.delete();
+        } catch (_) {}
+      }
+    }
+  }
+
   Future<void> copyDownloadedSongMp3(Song song, LocalTrack source) async {
-    final out = _songFile(song.id);
+    final sourceExt = source.path.split('.').last.toLowerCase();
+    final ext = _songExtensions.contains(sourceExt) ? sourceExt : 'mp3';
+    final out = _songFile(song.id, extension: ext);
     final database = db;
     if (out == null || database == null) {
       throw const FileSystemException('Local MP3 storage unavailable');
@@ -181,10 +288,7 @@ class LocalLibrary {
   }
 
   Future<void> removeSongTrack(String songId) async {
-    final f = _songFile(songId);
-    if (f != null && await f.exists()) {
-      await f.delete();
-    }
+    await _deleteAlternateSongFiles(songId);
     await db?.delete('tracks', where: 'id=?', whereArgs: ['song:$songId']);
   }
 

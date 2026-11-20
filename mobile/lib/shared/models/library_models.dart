@@ -196,6 +196,7 @@ class Song {
     bool? favorite,
     bool? audioReady,
     String? audioStatus,
+    String? downloadJobId,
     List<String>? albumIds,
   }) => Song(
     id: id,
@@ -216,7 +217,7 @@ class Song {
     audioStatus: audioStatus ?? this.audioStatus,
     audioStreamUrl: audioStreamUrl,
     audioSizeBytes: audioSizeBytes,
-    downloadJobId: downloadJobId,
+    downloadJobId: downloadJobId ?? this.downloadJobId,
     favorite: favorite ?? this.favorite,
     albumIds: albumIds ?? this.albumIds,
   );

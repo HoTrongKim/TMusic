@@ -15,6 +15,7 @@ import '../../shared/models/library_models.dart';
 import '../library/library_repository.dart';
 import '../playback/local_audio.dart';
 import '../playback/local_audio_screen.dart';
+import '../playback/on_device_download_manager.dart';
 import '../share/shared_links.dart';
 import 'song_actions.dart';
 
@@ -256,8 +257,10 @@ class _SongScreenState extends ConsumerState<SongScreen> {
             ? activeGlobal
             : null);
     final capsAsync = ref.watch(capabilitiesProvider);
+    final onDeviceYouTube = ref.watch(onDeviceYouTubeDownloaderProvider).isEnabled;
     final mp3Supported =
-        capsAsync.hasValue && capsAsync.value?['licensedAudioDownload'] == true;
+        (capsAsync.hasValue && capsAsync.value?['licensedAudioDownload'] == true) ||
+        (s?.provider == 'youtube' && onDeviceYouTube);
     final mp3Available =
         s != null && (_hasLocalMp3 || (!s.isGuestLocal && s.audioReady));
     final mp3Downloading =

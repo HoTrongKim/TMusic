@@ -16,6 +16,7 @@ import '../../shared/models/library_models.dart';
 import '../library/library_repository.dart';
 import '../playback/downloads_screen.dart';
 import '../playback/local_audio.dart';
+import '../playback/on_device_download_manager.dart';
 import '../share/shared_links.dart';
 
 /// Spotify-Inspired Link-to-MP3 Card supporting YouTube, TikTok, and SoundCloud
@@ -297,6 +298,7 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
 
   void _watchJobUntilDone(Song song, String jobId, String? ownerId) {
     _directJobPoll?.cancel();
+    final isLocal = OnDeviceDownloadManager.isLocalJobId(jobId);
     Future<void> poll() async {
       try {
         if (ref.read(sessionProvider).value?.userId != ownerId) return;
@@ -308,9 +310,16 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
         }
         ref.read(downloadJobsProvider.notifier).trackJob(job, ownerId: ownerId);
         if (job.isActive) {
-          _directJobPoll = Timer(const Duration(milliseconds: 1400), poll);
+          _directJobPoll = Timer(
+            Duration(milliseconds: isLocal ? 600 : 1400),
+            poll,
+          );
         } else if (job.audioReady) {
-          await _cacheOffline(song);
+          if (isLocal) {
+            if (mounted) setState(() => _offlineSaved = true);
+          } else {
+            await _cacheOffline(song);
+          }
           ref.read(libraryRevisionProvider.notifier).changed();
         }
       } catch (_) {}
@@ -418,8 +427,12 @@ class _SmartDownloadCardState extends ConsumerState<SmartDownloadCard> {
   Widget build(BuildContext context) {
     final shared = ref.watch(sharedLinksProvider);
     final capsAsync = ref.watch(capabilitiesProvider);
-    final mp3Supported =
+    final onDeviceYouTube = ref.watch(onDeviceYouTubeDownloaderProvider).isEnabled;
+    final serverMp3Supported =
         capsAsync.hasValue && capsAsync.value?['licensedAudioDownload'] == true;
+    final mp3Supported =
+        serverMp3Supported ||
+        (_preview?.provider == 'youtube' && onDeviceYouTube);
     final scheme = Theme.of(context).colorScheme;
 
     ref.listen(libraryRevisionProvider, (_, _) => _loadAlbumsAndDefaults());

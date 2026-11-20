@@ -9,6 +9,7 @@ import '../../core/storage/guest_library_store.dart';
 import '../../core/storage/library_cache.dart';
 import '../../shared/models/library_models.dart';
 import '../playback/local_audio.dart';
+import '../playback/on_device_download_manager.dart';
 import '../share/shared_links.dart';
 
 final libraryRepositoryProvider = Provider((ref) {
@@ -21,6 +22,9 @@ final libraryRepositoryProvider = Provider((ref) {
     offline: ref.read(offlineModeProvider.notifier),
     isGuest: userId == null,
     currentUserId: () => ref.read(sessionProvider).value?.userId,
+    onDeviceDownloads: ref.watch(onDeviceDownloadManagerProvider),
+    notifyLibraryChanged: () =>
+        ref.read(libraryRevisionProvider.notifier).changed(),
   );
 });
 
@@ -44,6 +48,8 @@ class LibraryRepository {
     required this.isGuest,
     required this.currentUserId,
     this.openLocalLibrary = LocalLibrary.open,
+    this.onDeviceDownloads,
+    this.notifyLibraryChanged,
   });
 
   final ApiClient api;
@@ -54,6 +60,12 @@ class LibraryRepository {
   final bool isGuest;
   final String? Function() currentUserId;
   final Future<LocalLibrary> Function(String owner) openLocalLibrary;
+  final OnDeviceDownloadManager? onDeviceDownloads;
+  final void Function()? notifyLibraryChanged;
+
+  String get _ownerKey => isGuest ? 'guest' : (currentUserId() ?? 'guest');
+  bool get _canDownloadYouTubeOnDevice =>
+      onDeviceDownloads?.isEnabled == true;
 
   static String _idempotencyKey() => List.generate(
     20,
@@ -275,13 +287,19 @@ class LibraryRepository {
       if (page == 1 && query.trim().isEmpty) {
         await cache.writeSnapshot(cacheKey, raw);
       }
-      return PageResult.fromJson(raw, Song.fromJson);
+      final parsed = PageResult.fromJson(raw, Song.fromJson);
+      return await _hydrateSongPage(parsed);
     } on ApiFailure catch (e) {
       if (e.status == null && page == 1 && query.trim().isEmpty) {
         final snap = await cache.readSnapshot(cacheKey);
         if (snap != null) {
           offline.setOffline(true);
-          return PageResult.fromJson(snap, Song.fromJson, fromCache: true);
+          final parsed = PageResult.fromJson(
+            snap,
+            Song.fromJson,
+            fromCache: true,
+          );
+          return _hydrateSongPage(parsed);
         }
       }
       rethrow;
@@ -300,7 +318,69 @@ class LibraryRepository {
       query: {'q': query.trim(), 'page': page, 'pageSize': 30},
     );
     offline.setOffline(false);
-    return SearchResults.fromJson(raw);
+    final res = SearchResults.fromJson(raw);
+    return SearchResults(
+      albums: res.albums,
+      songs: await _hydrateSongPage(res.songs),
+    );
+  }
+
+  Future<PageResult<Song>> _hydrateSongPage(PageResult<Song> page) async {
+    if (isGuest || !_canDownloadYouTubeOnDevice || page.items.isEmpty) {
+      return page;
+    }
+    final hydrated = await _hydrateSongsWithLocalAudio(page.items);
+    return PageResult(
+      hydrated,
+      page.total,
+      page.page,
+      page.pageSize,
+      fromCache: page.fromCache,
+    );
+  }
+
+  Future<List<Song>> _hydrateSongsWithLocalAudio(List<Song> items) async {
+    if (isGuest || !_canDownloadYouTubeOnDevice || items.isEmpty) return items;
+    final needsCheck = items.any((s) => !s.audioReady);
+    if (!needsCheck) return items;
+    LocalLibrary? local;
+    try {
+      local = await openLocalLibrary(_ownerKey);
+    } catch (_) {}
+    final activeBySong = <String, AudioDownloadJob>{};
+    for (final job in onDeviceDownloads?.jobsForOwner(_ownerKey) ??
+        const <AudioDownloadJob>[]) {
+      activeBySong.putIfAbsent(job.songId, () => job);
+    }
+    final result = <Song>[];
+    for (final s in items) {
+      if (s.audioReady) {
+        result.add(s);
+        continue;
+      }
+      if (local != null && await local.hasDownloadedSong(s.id)) {
+        result.add(s.copyWith(audioReady: true, audioStatus: 'COMPLETE'));
+        continue;
+      }
+      final job = activeBySong[s.id];
+      if (job != null) {
+        result.add(
+          s.copyWith(
+            audioReady: job.audioReady,
+            audioStatus: job.status,
+            downloadJobId: job.id,
+          ),
+        );
+        continue;
+      }
+      result.add(s);
+    }
+    return result;
+  }
+
+  Future<Song> _hydrateSingleSong(Song item) async {
+    final list = await _hydrateSongsWithLocalAudio([item]);
+    return list.first;
   }
 
   Future<Album> album(String id) async {
@@ -352,13 +432,13 @@ class LibraryRepository {
       final raw = await api.request('GET', '/library/songs/$id');
       offline.setOffline(false);
       await cache.writeSnapshot('song:$id', raw);
-      return Song.fromJson(raw);
+      return await _hydrateSingleSong(Song.fromJson(raw));
     } on ApiFailure catch (e) {
       if (e.status == null) {
         final cached = await cache.findCachedSong(id);
         if (cached != null) {
           offline.setOffline(true);
-          return Song.fromJson(cached);
+          return _hydrateSingleSong(Song.fromJson(cached));
         }
       }
       rethrow;
@@ -521,6 +601,18 @@ class LibraryRepository {
         albumIds: albums,
       );
       if (downloadMp3 && rightsConfirmed) {
+        if (prov == 'youtube' && _canDownloadYouTubeOnDevice) {
+          final localJob = await _startOnDeviceYouTube(
+            saved,
+            bitrateKbps: bitrateKbps,
+            guestSync: true,
+          );
+          saved = (await guestStore.getSong(saved.id)).copyWith(
+            audioStatus: localJob.status,
+            downloadJobId: localJob.id,
+          );
+          return saved;
+        }
         try {
           await startSongDownload(saved.id, bitrateKbps: bitrateKbps);
         } catch (_) {
@@ -530,7 +622,12 @@ class LibraryRepository {
       }
       return saved;
     }
-    return Song.fromJson(
+    final isYouTubeOnDevice =
+        downloadMp3 &&
+        rightsConfirmed &&
+        _canDownloadYouTubeOnDevice &&
+        SharedLinks.detectProvider(url) == 'youtube';
+    var saved = Song.fromJson(
       await api.request(
         'POST',
         '/library/songs',
@@ -539,13 +636,46 @@ class LibraryRepository {
           'customTitle': title,
           'customArtist': artist,
           'albumIds': albums,
-          'downloadMp3': downloadMp3,
+          'downloadMp3': isYouTubeOnDevice ? false : downloadMp3,
           'rightsConfirmed': rightsConfirmed,
           'bitrateKbps': ?bitrateKbps,
         },
       ),
     );
+    if (isYouTubeOnDevice && saved.provider == 'youtube') {
+      final localJob = await _startOnDeviceYouTube(
+        saved,
+        bitrateKbps: bitrateKbps,
+        guestSync: false,
+      );
+      saved = saved.copyWith(
+        audioStatus: localJob.status,
+        downloadJobId: localJob.id,
+      );
+    }
+    return saved;
   }
+
+  Future<AudioDownloadJob> _startOnDeviceYouTube(
+    Song target, {
+    int? bitrateKbps,
+    required bool guestSync,
+  }) => onDeviceDownloads!.startYouTubeDownload(
+    ownerKey: _ownerKey,
+    song: target,
+    openLocalLibrary: openLocalLibrary,
+    bitrateKbps: bitrateKbps,
+    onGuestStateChanged: guestSync
+        ? (status, {bool? audioReady}) async {
+            await guestStore.updateSong(
+              target.id,
+              audioReady: audioReady,
+              audioStatus: audioReady == null ? status : null,
+            );
+          }
+        : null,
+    onCompleted: notifyLibraryChanged,
+  );
 
   Future<AudioDownloadJob> startSongDownload(
     String songId, {
@@ -554,6 +684,13 @@ class LibraryRepository {
   }) async {
     if (isGuest || songId.startsWith('guest-')) {
       final s = await guestStore.getSong(songId);
+      if (s.provider == 'youtube' && _canDownloadYouTubeOnDevice) {
+        return _startOnDeviceYouTube(
+          s,
+          bitrateKbps: bitrateKbps,
+          guestSync: true,
+        );
+      }
       await guestStore.updateSong(s.id, audioStatus: 'RUNNING');
       try {
         final bytes = await publicApi.postBytes(
@@ -572,6 +709,32 @@ class LibraryRepository {
       } catch (_) {
         await guestStore.updateSong(s.id, audioStatus: 'FAILED');
         rethrow;
+      }
+    }
+    if (_canDownloadYouTubeOnDevice) {
+      final target = await song(songId);
+      if (target.provider == 'youtube') {
+        if (!force) {
+          final local = await openLocalLibrary(_ownerKey);
+          if (await local.hasDownloadedSong(target.id)) {
+            return AudioDownloadJob(
+              id: '${OnDeviceDownloadManager.jobPrefix}${target.id}',
+              songId: target.id,
+              songTitle: target.title,
+              songArtist: target.artist ?? target.originalCreator,
+              provider: 'youtube',
+              canonicalUrl: target.url,
+              status: 'COMPLETE',
+              progressPercent: 100,
+              audioReady: true,
+            );
+          }
+        }
+        return _startOnDeviceYouTube(
+          target,
+          bitrateKbps: bitrateKbps,
+          guestSync: false,
+        );
       }
     }
     return AudioDownloadJob.fromJson(
@@ -595,25 +758,53 @@ class LibraryRepository {
       await guestStore.updateSong(songId, audioReady: false);
       return;
     }
-    await api.request('DELETE', '/library/songs/$songId/audio');
+    try {
+      final local = await openLocalLibrary(_ownerKey);
+      await local.removeSongTrack(songId);
+    } catch (_) {}
+    try {
+      await api.request('DELETE', '/library/songs/$songId/audio');
+    } on ApiFailure catch (e) {
+      if (e.status != 404) rethrow;
+    }
   }
 
   Future<PageResult<AudioDownloadJob>> downloadJobs({int page = 1}) async {
+    final localJobs =
+        onDeviceDownloads?.jobsForOwner(_ownerKey) ?? const <AudioDownloadJob>[];
     if (isGuest) {
       final s = await guestStore.listSongs();
+      final localSongIds = localJobs.map((j) => j.songId).toSet();
       final ready = s.items
-          .where((x) => x.audioReady || x.audioStatus != 'NONE')
+          .where(
+            (x) =>
+                !localSongIds.contains(x.id) &&
+                (x.audioReady || x.audioStatus != 'NONE'),
+          )
           .map(_guestDownloadJob)
           .toList();
-      return PageResult(ready, ready.length, 1, max(50, ready.length));
+      final combined = [...localJobs, ...ready];
+      return PageResult(combined, combined.length, 1, max(50, combined.length));
     }
-    return PageResult.fromJson(
+    final remote = PageResult.fromJson(
       await api.request(
         'GET',
         '/downloads',
         query: {'page': page, 'pageSize': 30},
       ),
       AudioDownloadJob.fromJson,
+    );
+    if (localJobs.isEmpty || page != 1) return remote;
+    final seen = localJobs.map((j) => j.id).toSet();
+    final merged = [
+      ...localJobs,
+      ...remote.items.where((j) => !seen.contains(j.id)),
+    ];
+    return PageResult(
+      merged,
+      remote.total + localJobs.length,
+      remote.page,
+      max(remote.pageSize, merged.length),
     );
   }
 
@@ -642,6 +833,11 @@ class LibraryRepository {
   }
 
   Future<AudioDownloadJob> downloadJob(String jobId) async {
+    if (OnDeviceDownloadManager.isLocalJobId(jobId)) {
+      final found = onDeviceDownloads?.findJob(_ownerKey, jobId);
+      if (found != null) return found;
+      throw const ApiFailure('not_found', status: 404);
+    }
     if (isGuest || jobId.startsWith('guest-job-')) {
       return _guestDownloadJob(
         await guestStore.getSong(_guestJobSongId(jobId)),
@@ -653,6 +849,15 @@ class LibraryRepository {
   }
 
   Future<AudioDownloadJob> retryDownloadJob(String jobId) async {
+    if (OnDeviceDownloadManager.isLocalJobId(jobId)) {
+      final retried = await onDeviceDownloads?.retry(
+        _ownerKey,
+        jobId,
+        openLocalLibrary: openLocalLibrary,
+      );
+      if (retried != null) return retried;
+      throw const ApiFailure('not_found', status: 404);
+    }
     if (isGuest || jobId.startsWith('guest-job-')) {
       return startSongDownload(_guestJobSongId(jobId));
     }
@@ -662,6 +867,10 @@ class LibraryRepository {
   }
 
   Future<void> cancelOrDeleteDownloadJob(String jobId) async {
+    if (OnDeviceDownloadManager.isLocalJobId(jobId)) {
+      await onDeviceDownloads?.cancelOrDelete(_ownerKey, jobId);
+      return;
+    }
     if (isGuest || jobId.startsWith('guest-job-')) {
       await removeSongAudio(_guestJobSongId(jobId));
       return;
